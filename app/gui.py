@@ -1,45 +1,94 @@
-import sys
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel, QTableWidget, QTableWidgetItem
+BITGET_QSS = """
+QWidget {
+    background-color: #141A2F;  /* Dark background */
+    color: #F5F6FA;  /* Light text */
+    font-family: "Arial", sans-serif;
+}
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Crypto Trading App")
+QLabel {
+    color: #F5F6FA;  /* Light text for labels */
+    font-size: 14px;
+}
 
-        # Layout
-        layout = QVBoxLayout()
+QTableWidget {
+    background-color: #1E253A;  /* Slightly lighter dark for tables */
+    alternate-background-color: #262D45;
+    color: #F5F6FA;  /* Light text for table */
+    gridline-color: #2F374F;
+    border: 1px solid #2F374F;
+}
 
-        # Components
-        self.status_label = QLabel("Status: Stopped")
-        self.start_button = QPushButton("Start Trading")
-        self.stop_button = QPushButton("Stop Trading")
-        self.trades_table = QTableWidget(0, 4)
-        self.trades_table.setHorizontalHeaderLabels(["Time", "Action", "Amount", "Price"])
+QTableWidget::item {
+    background-color: #1E253A;
+    color: #F5F6FA;
+    selection-background-color: #2B6AF2;  /* Blue selection */
+    selection-color: #F5F6FA;  /* Text color for selected */
+}
 
-        # Actions
-        self.start_button.clicked.connect(self.start_trading)
-        self.stop_button.clicked.connect(self.stop_trading)
+QPushButton {
+    background-color: #2B6AF2;  /* Primary blue */
+    color: #F5F6FA;  /* White text */
+    border: 1px solid #2B6AF2;
+    border-radius: 4px;
+    padding: 5px 10px;
+}
 
-        # Add Components
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.stop_button)
-        layout.addWidget(self.trades_table)
+QPushButton:hover {
+    background-color: #3C79F5;  /* Lighter blue on hover */
+}
 
-        # Central Widget
-        central_widget = QWidget()
-        central_widget.setLayout(layout)
-        self.setCentralWidget(central_widget)
+QPushButton:pressed {
+    background-color: #1F57D1;  /* Darker blue on press */
+}
 
-    def start_trading(self):
-        self.status_label.setText("Status: Running")
+QLineEdit {
+    background-color: #1E253A;
+    color: #F5F6FA;
+    border: 1px solid #2F374F;
+    border-radius: 4px;
+    padding: 5px;
+}
 
-    def stop_trading(self):
-        self.status_label.setText("Status: Stopped")
+QComboBox {
+    background-color: #1E253A;
+    color: #F5F6FA;
+    border: 1px solid #2F374F;
+    border-radius: 4px;
+}
 
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #2F374F;
+}
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+QHeaderView::section {
+    background-color: #262D45;  /* Header background */
+    color: #F5F6FA;
+    padding: 5px;
+    border: 1px solid #2F374F;
+}
+
+QScrollBar:vertical {
+    background-color: #141A2F;
+    width: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #2B6AF2;
+    border-radius: 5px;
+}
+
+QScrollBar:horizontal {
+    background-color: #141A2F;
+    height: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #2B6AF2;
+    border-radius: 5px;
+}
+"""

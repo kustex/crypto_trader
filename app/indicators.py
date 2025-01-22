@@ -9,11 +9,6 @@ class Indicators:
     def calculate_keltner_channel(df: pd.DataFrame, period: int = 24, multiplier: float = 2.0):
         """
         Calculate the Keltner Channel (upper, lower, and mid bands).
-
-        :param df: DataFrame containing OHLCV data.
-        :param period: Lookback period for the moving average and ATR.
-        :param multiplier: Multiplier for the ATR to calculate channel bands.
-        :return: DataFrame with 'keltner_upper', 'keltner_lower', and 'keltner_mid' columns.
         """
         if len(df) < period:
             raise ValueError(f"Not enough data to calculate the indicator. Minimum {period} rows required.")
@@ -45,20 +40,33 @@ class Indicators:
         :param period: Lookback period for the RVI calculation.
         :return: DataFrame with 'rvi' column.
         """
-        if len(df) < period:
-            raise ValueError(f"Not enough data to calculate the indicator. Minimum {period} rows required.")
+        if df is None or df.empty:
+            print("Warning: DataFrame is empty or None. Skipping RVI calculation.")
+            return pd.DataFrame()
 
+        if len(df) < period:
+            raise ValueError(f"Not enough data to calculate RVI. Required: {period}, Available: {len(df)}")
+
+        # Remove existing numerator/denominator to avoid duplication
+        df = df.drop(columns=["numerator", "denominator", "rvi"], errors="ignore")
 
         # Calculate numerator and denominator
-        df['numerator'] = (df['close'] - df['open'] + 2 * (df['close'].shift(1) - df['open'].shift(1)) +
-                           (df['close'].shift(2) - df['open'].shift(2))) / 6
-        df['denominator'] = (df['high'] - df['low'] + 2 * (df['high'].shift(1) - df['low'].shift(1)) +
-                             (df['high'].shift(2) - df['low'].shift(2))) / 6
+        df["numerator"] = (
+            (df["close"] - df["open"])
+            + 2 * (df["close"].shift(1) - df["open"].shift(1))
+            + (df["close"].shift(2) - df["open"].shift(2))
+        ) / 6
+        df["denominator"] = (
+            (df["high"] - df["low"])
+            + 2 * (df["high"].shift(1) - df["low"].shift(1))
+            + (df["high"].shift(2) - df["low"].shift(2))
+        ) / 6
 
         # Calculate RVI
-        df['rvi'] = df['numerator'].rolling(window=period).sum() / df['denominator'].rolling(window=period).sum()
+        df["rvi"] = df["numerator"].rolling(window=period).sum() / df["denominator"].rolling(window=period).sum()
 
-        return df[['rvi']]
+        return df[["rvi"]]
+
 
 if __name__ == "__main__":
     # Example usage
