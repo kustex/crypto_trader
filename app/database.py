@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import time
+import psycopg2
 
 from datetime import datetime
 from sqlalchemy import create_engine, text
@@ -19,78 +20,121 @@ class DatabaseManager:
         """
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.POSTGRES_USER = "postgres"
+        self.POSTGRES_PASSWORD = "7aGpc4Uj"  
+        self.POSTGRES_DBNAME = "crypto_data"
+        self.POSTGRES_HOST = "127.0.0.1"  
+        self.POSTGRES_PORT = "5432"
+
+        # Create the database if it doesn't exist
+        self._create_database_if_not_exists()
+
         self.engine = create_engine(
-            f"sqlite:///{self.db_path}",
-            connect_args={"check_same_thread": False},
-            pool_size=5,  # Allow up to 5 concurrent connections
-            pool_recycle=3600,  # Recycle connections every hour
-            isolation_level="SERIALIZABLE",  # Ensure consistent transactions
+            f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DBNAME}",
+            pool_size=10,  
+            max_overflow=5, 
+            isolation_level="READ COMMITTED",  
         )
         self.create_tickers_table()
 
+    def _create_database_if_not_exists(self):
+        """
+        Checks if the database exists and creates it if necessary.
+        """
+        try:
+            # Connect to the PostgreSQL server (not a specific database)
+            conn = psycopg2.connect(
+                dbname="postgres", user=self.POSTGRES_USER, password=self.POSTGRES_PASSWORD, host=self.POSTGRES_HOST, port=self.POSTGRES_PORT
+            )
+            conn.autocommit = True
+            cursor = conn.cursor()
+
+            # Check if database exists
+            cursor.execute(f"SELECT 1 FROM pg_database WHERE datname = '{self.POSTGRES_DBNAME}'")
+            exists = cursor.fetchone()
+
+            if not exists:
+                print(f"Database '{self.POSTGRES_DBNAME}' does not exist. Creating it now...")
+                cursor.execute(f"CREATE DATABASE {self.POSTGRES_DBNAME}")
+                print(f"Database '{self.POSTGRES_DBNAME}' created successfully.")
+            else:
+                print(f"Database '{self.POSTGRES_DBNAME}' already exists.")
+
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error while checking/creating database: {e}")
+
     def initialize_database(self):
-        create_historical_table_query = text("""
-        CREATE TABLE IF NOT EXISTS historical_data (
-            timestamp TEXT NOT NULL,
-            open REAL,
-            high REAL,
-            low REAL,
-            close REAL,
-            volume REAL,
-            symbol TEXT NOT NULL,
-            timeframe TEXT NOT NULL,
-            PRIMARY KEY (timestamp, symbol, timeframe)
-        )
-        """)
-
-        create_signals_table_query = text("""
-        CREATE TABLE IF NOT EXISTS signals_data (
-            timestamp TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            timeframe TEXT NOT NULL,
-            keltner_signal INTEGER,
-            rvi_signal INTEGER,
-            final_signal INTEGER,
-            keltner_upper REAL,
-            keltner_lower REAL,
-            rvi REAL,
-            rvi_signal_15m INTEGER,  
-            PRIMARY KEY (timestamp, symbol, timeframe)
-        )
-        """)
-
-        create_indicator_params_table_query = text("""
-        CREATE TABLE IF NOT EXISTS indicator_params (
-            symbol TEXT NOT NULL,
-            timeframe TEXT NOT NULL,
-            keltner_period INTEGER DEFAULT 24,
-            keltner_multiplier REAL DEFAULT 2.0,
-            rvi_period INTEGER DEFAULT 24,
-            rvi_lower_threshold REAL DEFAULT -0.2,
-            rvi_upper_threshold REAL DEFAULT 0.2,
-            include_15m_rvi INTEGER DEFAULT 1,
-            PRIMARY KEY (symbol, timeframe)
-        )
-        """)
-
-        create_portfolio_risk_table_query = text("""
-        CREATE TABLE IF NOT EXISTS portfolio_risk_parameters (
-            symbol TEXT NOT NULL,
-            stoploss REAL DEFAULT 0.10,  
-            position_size REAL DEFAULT 0.05,  
-            max_allocation REAL DEFAULT 0.20,  
-            partial_sell_fraction REAL DEFAULT 0.2,  
-            PRIMARY KEY (symbol)
-        )
-        """)
+        """Creates all necessary tables if they do not exist."""
+        queries = [
+            """
+            CREATE TABLE IF NOT EXISTS historical_data (
+                timestamp TIMESTAMP NOT NULL,
+                open DOUBLE PRECISION,
+                high DOUBLE PRECISION,
+                low DOUBLE PRECISION,
+                close DOUBLE PRECISION,
+                volume DOUBLE PRECISION,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                PRIMARY KEY (timestamp, symbol, timeframe)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS indicator_historical_data (
+                timestamp TIMESTAMP NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                keltner_upper DOUBLE PRECISION,
+                keltner_lower DOUBLE PRECISION,
+                rvi DOUBLE PRECISION,
+                PRIMARY KEY (timestamp, symbol, timeframe)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS signals_data (
+                timestamp TIMESTAMP NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                keltner_signal INTEGER,
+                rvi_signal INTEGER,
+                rvi_signal_15m INTEGER DEFAULT 0,
+                final_signal INTEGER,
+                PRIMARY KEY (timestamp, symbol, timeframe)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS indicator_params (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                keltner_period INTEGER DEFAULT 24,
+                keltner_multiplier DOUBLE PRECISION DEFAULT 2.0,
+                rvi_period INTEGER DEFAULT 24,
+                rvi_lower_threshold DOUBLE PRECISION DEFAULT -0.2,
+                rvi_upper_threshold DOUBLE PRECISION DEFAULT 0.2,
+                include_15m_rvi INTEGER DEFAULT 1,
+                PRIMARY KEY (symbol, timeframe)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS portfolio_risk_parameters (
+                symbol TEXT NOT NULL,
+                stoploss DOUBLE PRECISION DEFAULT 0.10,
+                position_size DOUBLE PRECISION DEFAULT 0.05,
+                max_allocation DOUBLE PRECISION DEFAULT 0.20,
+                partial_sell_fraction DOUBLE PRECISION DEFAULT 0.2,
+                PRIMARY KEY (symbol)
+            )
+            """
+        ]
 
         with self.engine.connect() as connection:
-            connection.execute(create_historical_table_query)
-            connection.execute(create_signals_table_query)
-            connection.execute(create_indicator_params_table_query)
-            connection.execute(create_portfolio_risk_table_query)
+            for query in queries:
+                connection.execute(text(query))
+            connection.commit()  
 
-        print("Database initialized.")
+        print("Database initialized with all tables.")
 
     def execute_with_retry(self, connection, query, params=None, max_retries=5, delay=1):
         """
@@ -130,14 +174,20 @@ class DatabaseManager:
         return result[-1] if result else None
     
     def get_prices_for_last_24h(self, ticker):
+        """
+        Fetches closing prices for the last 24 hours for the given ticker.
+        """
         query = text("""
             SELECT close
             FROM historical_data
-            WHERE symbol = :ticker AND timestamp >= datetime('now', '-1 day')
+            WHERE symbol = :ticker 
+            AND timestamp >= NOW() - INTERVAL '1 day'
             ORDER BY timestamp ASC
         """)
+
         with self.engine.connect() as connection:
             results = connection.execute(query, {"ticker": ticker}).fetchall()
+
         return [row[0] for row in results] if results else []
 
     def create_tickers_table(self):
@@ -146,26 +196,31 @@ class DatabaseManager:
         """
         query = text("""
         CREATE TABLE IF NOT EXISTS tickers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             symbol TEXT UNIQUE NOT NULL
         )
         """)
+
         with self.engine.connect() as connection:
             connection.execute(query)
+            connection.commit()  
 
-        # Insert default tickers if table is empty
+
+        # Insert default tickers if the table is empty
         default_tickers = ["BTC/USDT", "ETH/USDT"]
         for ticker in default_tickers:
             self.insert_ticker(ticker)
 
     def insert_ticker(self, ticker):
         """
-        Insert a ticker into the tickers table.
+        Insert a ticker into the tickers table, ignoring duplicates.
         """
         query = text("""
-        INSERT OR IGNORE INTO tickers (symbol)
-        VALUES (:symbol)
+            INSERT INTO tickers (symbol)
+            VALUES (:symbol)
+            ON CONFLICT(symbol) DO NOTHING
         """)
+
         with self.engine.connect() as connection:
             connection.execute(query, {"symbol": ticker})
             connection.commit()
@@ -192,20 +247,24 @@ class DatabaseManager:
             raise ValueError(f"Ticker {symbol} does not exist in the database.")
 
     def save_to_db(self, df: pd.DataFrame):
+        """
+        Save historical data to PostgreSQL.
+        """
         if df.empty:
             print("No data to save.")
             return
 
-        df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+        
         try:
             with self.engine.begin() as connection:
                 for _, row in df.iterrows():
                     query = text("""
-                        INSERT OR IGNORE INTO historical_data
-                        (timestamp, open, high, low, close, volume, symbol, timeframe)
+                        INSERT INTO historical_data (timestamp, open, high, low, close, volume, symbol, timeframe)
                         VALUES (:timestamp, :open, :high, :low, :close, :volume, :symbol, :timeframe)
+                        ON CONFLICT (timestamp, symbol, timeframe) DO NOTHING
                     """)
-                    self.execute_with_retry(connection, query, {
+                    connection.execute(query, {
                         "timestamp": row["timestamp"],
                         "open": row["open"],
                         "high": row["high"],
@@ -215,93 +274,122 @@ class DatabaseManager:
                         "symbol": row["symbol"],
                         "timeframe": row["timeframe"],
                     })
+            
+            print(f"Saved {len(df)} rows to historical_data.")
+
         except Exception as e:
             print(f"Error saving data to the database: {e}")
 
+
     def save_signals_to_db(self, df: pd.DataFrame):
         """
-        Save the DataFrame with signals and indicators to the signals_data table.
-
-        :param df: DataFrame containing signals and indicators.
+        Save the DataFrame with signals to the signals_data table.
         """
         if df.empty:
             print("No signals to save.")
             return
 
-        # Ensure all required columns are present
-        required_columns = [
-            "timestamp", "symbol", "timeframe", "keltner_signal", "rvi_signal",
-            "final_signal", "keltner_upper", "keltner_lower", "rvi", "rvi_signal_15m"
-        ]
-        for col in required_columns:
-            if col not in df.columns:
-                if col == "rvi_signal_15m":
-                    df[col] = 0  # Default value
-                else:
-                    raise ValueError(f"Missing required column: {col}")
+        required_columns = {"timestamp", "symbol", "timeframe", "keltner_signal", "rvi_signal", "rvi_signal_15m", "final_signal"}
+        missing_columns = required_columns - set(df.columns)
+        
+        if missing_columns:
+            print(f"Error: Missing required columns in DataFrame: {missing_columns}")
+            return
 
-        # Format timestamp to match database schema
         df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S.%f")
 
         try:
             with self.engine.begin() as connection:
                 for _, row in df.iterrows():
                     query = text("""
-                        INSERT INTO signals_data
-                        (timestamp, symbol, timeframe, keltner_signal, rvi_signal, final_signal,
-                        keltner_upper, keltner_lower, rvi, rvi_signal_15m)
-                        VALUES (:timestamp, :symbol, :timeframe, :keltner_signal, :rvi_signal, :final_signal,
-                                :keltner_upper, :keltner_lower, :rvi, :rvi_signal_15m)
-                        ON CONFLICT(timestamp, symbol, timeframe) DO UPDATE SET
-                            keltner_signal = excluded.keltner_signal,
-                            rvi_signal = excluded.rvi_signal,
-                            final_signal = excluded.final_signal,
-                            keltner_upper = excluded.keltner_upper,
-                            keltner_lower = excluded.keltner_lower,
-                            rvi = excluded.rvi,
-                            rvi_signal_15m = excluded.rvi_signal_15m
+                        INSERT INTO signals_data (timestamp, symbol, timeframe, keltner_signal, rvi_signal, rvi_signal_15m, final_signal)
+                        VALUES (:timestamp, :symbol, :timeframe, :keltner_signal, :rvi_signal, :rvi_signal_15m, :final_signal)
+                        ON CONFLICT (timestamp, symbol, timeframe) DO UPDATE 
+                        SET keltner_signal = EXCLUDED.keltner_signal,
+                            rvi_signal = EXCLUDED.rvi_signal,
+                            rvi_signal_15m = EXCLUDED.rvi_signal_15m,
+                            final_signal = EXCLUDED.final_signal
                     """)
-                    self.execute_with_retry(connection, query, {
+                    connection.execute(query, {
                         "timestamp": row["timestamp"],
                         "symbol": row["symbol"],
                         "timeframe": row["timeframe"],
                         "keltner_signal": row["keltner_signal"],
                         "rvi_signal": row["rvi_signal"],
+                        "rvi_signal_15m": row["rvi_signal_15m"],
                         "final_signal": row["final_signal"],
+                    })
+
+            print(f"Signals saved to database ({len(df)} rows).")
+
+        except Exception as e:
+            print(f"Error saving signals to the database: {e}")
+
+
+    def save_indicators_to_db(self, df: pd.DataFrame):
+        """
+        Save indicator data into the indicator_historical_data table.
+        """
+        if df.empty:
+            print("No indicators to save.")
+            return
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+        try:
+            with self.engine.begin() as connection:
+                for _, row in df.iterrows():
+                    query = text("""
+                        INSERT INTO indicator_historical_data (timestamp, symbol, timeframe, keltner_upper, keltner_lower, rvi)
+                        VALUES (:timestamp, :symbol, :timeframe, :keltner_upper, :keltner_lower, :rvi)
+                        ON CONFLICT (timestamp, symbol, timeframe) DO UPDATE 
+                        SET keltner_upper = EXCLUDED.keltner_upper,
+                            keltner_lower = EXCLUDED.keltner_lower,
+                            rvi = EXCLUDED.rvi
+                    """)
+                    connection.execute(query, {
+                        "timestamp": row["timestamp"],
+                        "symbol": row["symbol"],
+                        "timeframe": row["timeframe"],
                         "keltner_upper": row["keltner_upper"],
                         "keltner_lower": row["keltner_lower"],
                         "rvi": row["rvi"],
-                        "rvi_signal_15m": row["rvi_signal_15m"],
                     })
-            print("Signals and indicators saved to database.")
+
+            print("Indicators saved to database.")
+
         except Exception as e:
-            print(f"Error saving signals to the database: {e}")
+            print(f"Error saving indicators to the database: {e}")
+
 
     def save_risk_params(self, symbol, stoploss, position_size, max_allocation, partial_sell_fraction):
         """
         Save or update portfolio risk parameters for a given symbol.
         """
         query = text("""
-        INSERT INTO portfolio_risk_parameters (symbol, stoploss, position_size, max_allocation, partial_sell_fraction)
-        VALUES (:symbol, :stoploss, :position_size, :max_allocation, :partial_sell_fraction)
-        ON CONFLICT(symbol) DO UPDATE SET
-            stoploss = :stoploss,
-            position_size = :position_size,
-            max_allocation = :max_allocation,
-            partial_sell_fraction = :partial_sell_fraction
+            INSERT INTO portfolio_risk_parameters (symbol, stoploss, position_size, max_allocation, partial_sell_fraction)
+            VALUES (:symbol, :stoploss, :position_size, :max_allocation, :partial_sell_fraction)
+            ON CONFLICT(symbol) DO UPDATE 
+            SET stoploss = EXCLUDED.stoploss,
+                position_size = EXCLUDED.position_size,
+                max_allocation = EXCLUDED.max_allocation,
+                partial_sell_fraction = EXCLUDED.partial_sell_fraction
         """)
-        print(f"Saving risk parameters for {symbol}: stoploss={stoploss}, position_size={position_size}, max_allocation={max_allocation}, partial_sell_fraction={partial_sell_fraction}")
-        
-        with self.engine.connect() as connection:
-            connection.execute(query, {
-                "symbol": symbol,
-                "stoploss": stoploss,
-                "position_size": position_size,
-                "max_allocation": max_allocation,
-                "partial_sell_fraction": partial_sell_fraction
-            })
-            connection.commit()
-        print(f"Risk parameters saved for {symbol}.")
+
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(query, {
+                    "symbol": symbol,
+                    "stoploss": stoploss,
+                    "position_size": position_size,
+                    "max_allocation": max_allocation,
+                    "partial_sell_fraction": partial_sell_fraction
+                })
+
+            print(f"Risk parameters saved for {symbol}.")
+
+        except Exception as e:
+            print(f"Error saving risk parameters: {e}")
 
     def fetch_risk_params(self, symbol):
         """
@@ -309,10 +397,11 @@ class DatabaseManager:
         If no parameters exist, save default parameters and return them.
         """
         query = text("""
-        SELECT stoploss, position_size, max_allocation, partial_sell_fraction
-        FROM portfolio_risk_parameters
-        WHERE symbol = :symbol
+            SELECT stoploss, position_size, max_allocation, partial_sell_fraction
+            FROM portfolio_risk_parameters
+            WHERE symbol = :symbol
         """)
+        
         with self.engine.connect() as connection:
             result = connection.execute(query, {"symbol": symbol}).fetchone()
 
@@ -342,6 +431,7 @@ class DatabaseManager:
                 default_params["partial_sell_fraction"]
             )
 
+
     def save_indicator_params(
         self, symbol, timeframe, keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi
     ):
@@ -349,17 +439,18 @@ class DatabaseManager:
         Save or update indicator parameters for a given symbol and timeframe.
         """
         query = text("""
-        INSERT INTO indicator_params (symbol, timeframe, keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi)
-        VALUES (:symbol, :timeframe, :keltner_period, :keltner_multiplier, :rvi_period, :rvi_lower_threshold, :rvi_upper_threshold, :include_15m_rvi)
-        ON CONFLICT(symbol, timeframe) DO UPDATE SET
-            keltner_period = :keltner_period,
-            keltner_multiplier = :keltner_multiplier,
-            rvi_period = :rvi_period,
-            rvi_lower_threshold = :rvi_lower_threshold,
-            rvi_upper_threshold = :rvi_upper_threshold,
-            include_15m_rvi = :include_15m_rvi
+            INSERT INTO indicator_params (symbol, timeframe, keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi)
+            VALUES (:symbol, :timeframe, :keltner_period, :keltner_multiplier, :rvi_period, :rvi_lower_threshold, :rvi_upper_threshold, :include_15m_rvi)
+            ON CONFLICT(symbol, timeframe) DO UPDATE SET
+                keltner_period = EXCLUDED.keltner_period,
+                keltner_multiplier = EXCLUDED.keltner_multiplier,
+                rvi_period = EXCLUDED.rvi_period,
+                rvi_lower_threshold = EXCLUDED.rvi_lower_threshold,
+                rvi_upper_threshold = EXCLUDED.rvi_upper_threshold,
+                include_15m_rvi = EXCLUDED.include_15m_rvi
         """)
-        with self.engine.connect() as connection:
+        
+        with self.engine.begin() as connection:
             connection.execute(query, {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -370,7 +461,7 @@ class DatabaseManager:
                 "rvi_upper_threshold": rvi_upper_threshold,
                 "include_15m_rvi": include_15m_rvi
             })
-            connection.commit()
+
         print(f"Parameters saved for {symbol} ({timeframe}).")
 
 
@@ -380,10 +471,11 @@ class DatabaseManager:
         If no parameters exist, save default parameters and return them.
         """
         query = text("""
-        SELECT keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi
-        FROM indicator_params
-        WHERE symbol = :symbol AND timeframe = :timeframe
+            SELECT keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi
+            FROM indicator_params
+            WHERE symbol = :symbol AND timeframe = :timeframe
         """)
+
         with self.engine.connect() as connection:
             result = connection.execute(query, {"symbol": symbol, "timeframe": timeframe}).fetchone()
 
@@ -423,16 +515,15 @@ class DatabaseManager:
 
     def fetch_include_15m_rvi(self, symbol: str, timeframe: str) -> bool:
         """
-        Debug connection usage in `fetch_include_15m_rvi`.
+        Fetch the 15m RVI flag from indicator_params.
         """
-        print(f"Checking 15m RVI for {symbol} ({timeframe})...")
         query = text("""
             SELECT include_15m_rvi
             FROM indicator_params
             WHERE symbol = :symbol AND timeframe = :timeframe
         """)
+        
         with self.engine.connect() as connection:
-            print("Connection successful.")
             result = connection.execute(query, {"symbol": symbol, "timeframe": timeframe}).fetchone()
 
         return bool(result[0]) if result else False
@@ -441,18 +532,16 @@ class DatabaseManager:
     def get_last_stored_timestamp(self, symbol: str, timeframe: str) -> int:
         """
         Retrieve the most recent timestamp stored in the database for a given symbol and timeframe.
-
-        :param symbol: Trading pair (e.g., 'BTC/USDT').
-        :param timeframe: Timeframe (e.g., '1h', '1d').
-        :return: Most recent timestamp in milliseconds, or None if no data exists.
         """
         query = text("""
             SELECT MAX(timestamp) as last_timestamp
             FROM historical_data
             WHERE symbol = :symbol AND timeframe = :timeframe
         """)
+        
         with self.engine.connect() as connection:
             result = connection.execute(query, {"symbol": symbol, "timeframe": timeframe}).fetchone()
+        
         if result and result[0]:
             try:
                 timestamp_ms = int(pd.to_datetime(result[0]).timestamp() * 1000)
@@ -461,7 +550,10 @@ class DatabaseManager:
                 print(f"Error parsing timestamp {result[0]}: {e}")
         else:
             print(f"No data found for {symbol} ({timeframe}).")
+        
         return None
+
+
 
     def query_data(self, symbol: str, timeframe: str, start: str = None, end: str = None) -> pd.DataFrame:
         """
@@ -525,3 +617,34 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error accessing database content: {e}")
 
+    def query_main_timeframe_data(self, symbol, timeframe):
+        """
+        Query the main timeframe data (e.g., 1h) and its indicators.
+        """
+        query = f"""
+            SELECT h.timestamp, h.open, h.high, h.low, h.close, h.volume,
+                i.keltner_upper, i.keltner_lower, i.rvi,
+                s.keltner_signal, s.rvi_signal, s.final_signal
+            FROM historical_data h
+            LEFT JOIN indicator_historical_data i
+            ON h.timestamp = i.timestamp AND h.symbol = i.symbol AND h.timeframe = i.timeframe
+            LEFT JOIN signals_data s
+            ON h.timestamp = s.timestamp AND h.symbol = s.symbol AND h.timeframe = s.timeframe
+            WHERE h.symbol = '{symbol}' AND h.timeframe = '{timeframe}'
+            ORDER BY h.timestamp ASC
+        """
+        with self.engine.connect() as connection:
+            return pd.read_sql(query, connection)
+
+    def query_15m_rvi_data(self, symbol):
+        """
+        Query the 15m RVI data.
+        """
+        query = f"""
+            SELECT timestamp, rvi 
+            FROM indicator_historical_data
+            WHERE symbol = '{symbol}' AND timeframe = '15m'
+            ORDER BY timestamp ASC
+        """
+        with self.engine.connect() as connection:
+            return pd.read_sql(query, connection)

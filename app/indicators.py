@@ -1,71 +1,76 @@
 import pandas as pd
 
+
 class Indicators:
     """
     Provides methods to calculate various trading indicators.
     """
 
     @staticmethod
-    def calculate_keltner_channel(df: pd.DataFrame, period: int = 24, multiplier: float = 2.0):
+    def calculate_keltner_channel(df: pd.DataFrame, period: int, multiplier: float):
         """
-        Calculate the Keltner Channel (upper, lower, and mid bands).
+        Calculate the Keltner Channels for the given DataFrame.
+
+        :param df: DataFrame containing OHLC data (must have 'high', 'low', 'close' columns).
+        :param period: The period for calculating the moving average and ATR.
+        :param multiplier: The multiplier for the ATR to calculate upper and lower bands.
+        :return: DataFrame with 'keltner_upper', 'keltner_lower', and 'keltner_mid' columns.
         """
-        if len(df) < period:
-            raise ValueError(f"Not enough data to calculate the indicator. Minimum {period} rows required.")
+        df = df.copy()  # Avoid modifying the original DataFrame
+        
+        # Step 1: Calculate the typical price
+        df.loc[:, 'typical_price'] = (df['high'] + df['low'] + df['close']) / 3
 
-        # Calculate typical price
-        df['typical_price'] = (df['high'] + df['low'] + df['close']) / 3
+        # Step 2: Calculate the exponential moving average (EMA) of the typical price
+        df.loc[:, 'keltner_mid'] = df['typical_price'].ewm(span=period, adjust=False).mean()
 
-        # Calculate Exponential Moving Average (EMA) of the typical price
-        df['keltner_mid'] = df['typical_price'].ewm(span=period, adjust=False).mean()
-
-        # Calculate the Average True Range (ATR)
-        df['true_range'] = df[['high', 'low', 'close']].apply(
-            lambda x: max(x['high'] - x['low'], abs(x['high'] - x['close']), abs(x['low'] - x['close'])), axis=1
+        # Step 3: Calculate the true range and average true range (ATR)
+        df.loc[:, 'true_range'] = df[['high', 'low', 'close']].apply(
+            lambda x: max(x['high'] - x['low'], abs(x['high'] - x['close']), abs(x['low'] - x['close'])),
+            axis=1
         )
-        df['atr'] = df['true_range'].ewm(span=period, adjust=False).mean()
+        df.loc[:, 'atr'] = df['true_range'].ewm(span=period, adjust=False).mean()
 
-        # Calculate upper and lower bands
-        df['keltner_upper'] = df['keltner_mid'] + (multiplier * df['atr'])
-        df['keltner_lower'] = df['keltner_mid'] - (multiplier * df['atr'])
+        # Step 4: Calculate the upper and lower bands
+        df.loc[:, 'keltner_upper'] = df['keltner_mid'] + (multiplier * df['atr'])
+        df.loc[:, 'keltner_lower'] = df['keltner_mid'] - (multiplier * df['atr'])
 
+        # Return only the relevant columns
         return df[['keltner_upper', 'keltner_lower', 'keltner_mid']]
 
+
     @staticmethod
-    def calculate_rvi(df: pd.DataFrame, period: int = 24):
+    def calculate_rvi(df: pd.DataFrame, period: int):
         """
-        Calculate the Relative Vigor Index (RVI).
+        Calculate the Relative Vigor Index (RVI) for the given DataFrame.
 
-        :param df: DataFrame containing OHLCV data.
-        :param period: Lookback period for the RVI calculation.
-        :return: DataFrame with 'rvi' column.
+        :param df: DataFrame containing OHLC data (must have 'open', 'high', 'low', 'close' columns).
+        :param period: The period for calculating the RVI.
+        :return: DataFrame with the 'rvi' column.
         """
-        if df is None or df.empty:
-            print("Warning: DataFrame is empty or None. Skipping RVI calculation.")
-            return pd.DataFrame()
+        df = df.copy()  # Avoid modifying the original DataFrame
 
-        if len(df) < period:
-            raise ValueError(f"Not enough data to calculate RVI. Required: {period}, Available: {len(df)}")
-
-        # Remove existing numerator/denominator to avoid duplication
-        df = df.drop(columns=["numerator", "denominator", "rvi"], errors="ignore")
-
-        # Calculate numerator and denominator
-        df["numerator"] = (
-            (df["close"] - df["open"])
-            + 2 * (df["close"].shift(1) - df["open"].shift(1))
-            + (df["close"].shift(2) - df["open"].shift(2))
-        ) / 6
-        df["denominator"] = (
-            (df["high"] - df["low"])
-            + 2 * (df["high"].shift(1) - df["low"].shift(1))
-            + (df["high"].shift(2) - df["low"].shift(2))
+        # Step 1: Calculate numerator and denominator for RVI
+        df.loc[:, 'numerator'] = (
+            (df['close'] - df['open']) +
+            2 * ((df['close'].shift(1) - df['open'].shift(1))) +
+            2 * ((df['close'].shift(2) - df['open'].shift(2))) +
+            (df['close'].shift(3) - df['open'].shift(3))
         ) / 6
 
-        # Calculate RVI
-        df["rvi"] = df["numerator"].rolling(window=period).sum() / df["denominator"].rolling(window=period).sum()
+        df.loc[:, 'denominator'] = (
+            (df['high'] - df['low']) +
+            2 * ((df['high'].shift(1) - df['low'].shift(1))) +
+            2 * ((df['high'].shift(2) - df['low'].shift(2))) +
+            (df['high'].shift(3) - df['low'].shift(3))
+        ) / 6
 
-        return df[["rvi"]]
+        # Step 2: Calculate RVI
+        df.loc[:, 'rvi'] = df['numerator'].rolling(window=period).mean() / df['denominator'].rolling(window=period).mean()
+
+        # Return only the 'rvi' column
+        return df[['rvi']]
+
 
 
 if __name__ == "__main__":

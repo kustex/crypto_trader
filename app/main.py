@@ -37,37 +37,56 @@ class BackgroundWorker(QThread):
 
 
 class PlotCanvas(FigureCanvas):
-    def __init__(self, parent=None, width=10, height=10, dpi=100):
+    def __init__(self, db_manager, parent=None, width=10, height=10, dpi=100):
+        self.db_manager = db_manager
         self.fig, self.axs = plt.subplots(3, 1, figsize=(width, height), dpi=dpi)  # Three subplots
         super().__init__(self.fig)
         self.setParent(parent)
 
-    def plot_data(self, df, symbol, timeframe):
+    def plot_data(self, symbol, timeframe, include_15m_rvi):
         """
-        Plot price with Keltner Channels and RVI, optionally including 15m RVI.
+        Query data and plot it dynamically based on the symbol, timeframe, and inclusion of 15m RVI.
         """
-        if df.empty:
+        # Query the main timeframe data
+        main_df = self.db_manager.query_main_timeframe_data(symbol, timeframe)
+
+        if main_df.empty:
             for ax in self.axs:
                 ax.clear()
                 ax.text(0.5, 0.5, "No Data Available", ha="center", va="center")
             self.draw()
             return
 
-        # Determine date range dynamically based on timeframe
-        max_date = df["timestamp"].max()
+        # Convert timestamp to datetime if not already done
+        main_df["timestamp"] = pd.to_datetime(main_df["timestamp"])
+
+        # Filter main timeframe data for plotting range
+        max_date = main_df["timestamp"].max()
         lookback_period = pd.Timedelta(days=30) if timeframe == "1h" else pd.Timedelta(days=180)
         min_date = max_date - lookback_period
+        main_df = main_df[main_df["timestamp"] >= min_date]
 
-        # Filter DataFrame for the desired range
-        df = df[df["timestamp"] >= min_date]
+        # Plot the data
+        self._plot_main_timeframe(main_df, symbol, timeframe)
+        self._plot_rvi(main_df)
+        # Query the 15m RVI data if needed
 
-        # Plot price with Keltner Channels
+        if include_15m_rvi and timeframe == "1h":
+            df_15m = self.db_manager.query_15m_rvi_data(symbol)
+            # print(df_15m.tail(200).to_string())
+            df_15m["timestamp"] = pd.to_datetime(df_15m['timestamp'])
+            df_15m = df_15m[df_15m['timestamp'] >= df_15m['timestamp'].max() - lookback_period]
+            self._plot_15m_rvi(df_15m)
+
+        self.fig.tight_layout()
+        self.draw()
+
+    def _plot_main_timeframe(self, df, symbol, timeframe):
         self.axs[0].clear()
         self.axs[0].plot(df["timestamp"], df["close"], label="Price", color="blue")
         self.axs[0].plot(df["timestamp"], df["keltner_upper"], label="Keltner Upper", color="green", linestyle="--")
         self.axs[0].plot(df["timestamp"], df["keltner_lower"], label="Keltner Lower", color="red", linestyle="--")
 
-        # Annotate buy and sell signals
         buy_signals = df[df["final_signal"] == 1]
         sell_signals = df[df["final_signal"] == -1]
         self.axs[0].scatter(buy_signals["timestamp"], buy_signals["close"], color="green", label="Buy Signal", marker="^")
@@ -77,7 +96,7 @@ class PlotCanvas(FigureCanvas):
         self.axs[0].legend()
         self.axs[0].set_ylabel("Price")
 
-        # Plot RVI
+    def _plot_rvi(self, df):
         self.axs[1].clear()
         self.axs[1].plot(df["timestamp"], df["rvi"], label="RVI", color="purple")
         self.axs[1].axhline(y=0, color="black", linestyle="--", linewidth=0.8)
@@ -85,22 +104,13 @@ class PlotCanvas(FigureCanvas):
         self.axs[1].set_ylabel("RVI")
         self.axs[1].legend()
 
-        # Plot 15m RVI if provided
+    def _plot_15m_rvi(self, df_15m):
         self.axs[2].clear()
-        print(df.columns)
-        if "rvi_15m" in df.columns:
-            self.axs[2].plot(df["timestamp"], df["rvi_15m"], label="15m RVI", color="orange")
-            self.axs[2].axhline(y=0, color="black", linestyle="--", linewidth=0.8)
-            self.axs[2].set_title("15m RVI")
-            self.axs[2].set_ylabel("RVI (15m)")
-            self.axs[2].legend()
-        else:
-            self.axs[2].clear()
-            self.axs[2].text(0.5, 0.5, "15m RVI not included", ha="center", va="center")
-
-        self.fig.tight_layout()
-        self.draw()
-
+        self.axs[2].plot(df_15m["timestamp"], df_15m["rvi"], label="15m RVI", color="orange")
+        self.axs[2].axhline(y=0, color="black", linestyle="--", linewidth=0.8)
+        self.axs[2].set_title("15m RVI")
+        self.axs[2].set_ylabel("RVI (15m)")
+        self.axs[2].legend()
 
 class TickerApp(QMainWindow):
     def __init__(self):
@@ -288,7 +298,7 @@ class TickerApp(QMainWindow):
         plot_label = QLabel("Price and Indicators")
         plot_label.setStyleSheet("font-weight: bold; font-size: 16px;")
         plot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.plot_canvas = PlotCanvas()
+        self.plot_canvas = PlotCanvas(self.db_manager)
 
         right_layout.addStretch(1)
         right_layout.addWidget(plot_label)
@@ -321,9 +331,9 @@ class TickerApp(QMainWindow):
         main_layout.setColumnStretch(2, 5)  # Right column (Price and Indicators)
 
         # Timer for periodic updates
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh_data)
-        self.timer.start(60 * 1000)  # Refresh every 60 seconds
+        # self.timer = QTimer(self)
+        # self.timer.timeout.connect(self.refresh_data(for_display=False))
+        # self.timer.start(60 * 1000)  # Refresh every 60 seconds
 
         # Initialize app with default data
         self.current_symbol = None
@@ -453,14 +463,14 @@ class TickerApp(QMainWindow):
 
         self.current_timeframe = timeframe
 
-        # Clear previous parameter inputs
+        # Clear and update parameter inputs
         for widget in self.param_labels + self.param_inputs:
             self.param_grid.removeWidget(widget)
             widget.deleteLater()
         self.param_labels.clear()
         self.param_inputs.clear()
 
-        # Fetch parameters from the database
+        # Fetch and display parameters
         params = self.db_manager.fetch_indicator_params(self.current_symbol, self.current_timeframe)
         if not params:
             print(f"No parameters found for {self.current_symbol} ({self.current_timeframe}).")
@@ -479,9 +489,15 @@ class TickerApp(QMainWindow):
             self.param_inputs.append(input_field)
 
         # Set the state of the include_15m_rvi checkbox
-        include_15m_rvi = bool(params[-1])  
+        include_15m_rvi = bool(params[5])
         self.include_15m_rvi_checkbox.setChecked(include_15m_rvi)
-        self.refresh_data()
+
+        # Directly call plot_data()
+        self.plot_canvas.plot_data(
+            symbol=self.current_symbol,
+            timeframe=self.current_timeframe,
+            include_15m_rvi=include_15m_rvi
+        )
 
     def save_risk_settings(self):
         """
@@ -534,142 +550,51 @@ class TickerApp(QMainWindow):
             self.update_status_label("No Ticker Selected", QDateTime.currentDateTime())
             return
 
-        def task():
-            try:
-                # Query the main DataFrame
-                df = self.db_manager.query_data(self.current_symbol, self.current_timeframe)
-                if df is None or df.empty:
-                    print(f"No data available for {self.current_symbol} ({self.current_timeframe}).")
-                    return None
-
-                # Fetch indicator parameters
-                params = self.db_manager.fetch_indicator_params(self.current_symbol, self.current_timeframe)
-                if not params or len(params) < 6:
-                    print(f"Invalid or missing parameters for {self.current_symbol} ({self.current_timeframe}): {params}")
-                    return None
-
-                keltner_params = {"period": params[0], "multiplier": params[1]}
-                rvi_params = {"period": params[2], "thresholds": {"lower": params[3], "upper": params[4]}}
-                include_15m_rvi = bool(params[5])
-
-                # Query 15m data if necessary
-                df_15m = None
-                if include_15m_rvi:
-                    df_15m = self.db_manager.query_data(self.current_symbol, "15m")
-                    if df_15m is None or df_15m.empty:
-                        print(f"Warning: 15m data unavailable for {self.current_symbol}. Proceeding without it.")
-                        include_15m_rvi = False
-
-                # Generate signals
-                signal_generator = SignalGenerator(db_manager=self.db_manager)
-                final_signals = signal_generator.generate_signals(
-                    df, keltner_params=keltner_params, rvi_params=rvi_params, timeframe=self.current_timeframe, df_15m=df_15m
-                )
-
-                if final_signals is None or final_signals.empty:
-                    print("Signal generation returned an empty DataFrame.")
-                    return None
-
-                if not include_15m_rvi:
-                    final_signals['rvi_signal_15m'] = 0
-
-                # Prepare a DataFrame for saving to the database
-                db_signals = final_signals[[  # Ensure all columns exist
-                    "timestamp", "symbol", "timeframe", "keltner_signal",
-                    "rvi_signal", "final_signal", "keltner_upper",
-                    "keltner_lower", "rvi", "rvi_signal_15m"
-                ]].copy()
-
-                # Save signals to the database
-                self.db_manager.save_signals_to_db(db_signals)
-
-                # Return updated DataFrame for plotting
-                return final_signals, self.current_symbol, self.current_timeframe
-
-            except Exception as e:
-                print(f"Error in task: {e}")
+        try:
+            # Step 1: Query historical data
+            df = self.db_manager.query_data(self.current_symbol, self.current_timeframe)
+            if df is None or df.empty:
+                print(f"No data available for {self.current_symbol} ({self.current_timeframe}).")
                 return None
 
-        # Start background worker
-        self.worker = BackgroundWorker(task)
-        self.worker.data_ready_signal.connect(self.handle_data_ready)
-        self.worker.progress_signal.connect(self.update_status_label)
-        self.worker.finished.connect(self.cleanup_worker)
-        self.worker.start()
+            # Step 2: Fetch indicator parameters
+            params = self.db_manager.fetch_indicator_params(self.current_symbol, self.current_timeframe)
+            if not params or len(params) < 6:
+                print(f"Invalid or missing parameters for {self.current_symbol} ({self.current_timeframe}): {params}")
+                return None
 
-    def refresh_data(self):
-        if not self.current_symbol or not self.current_timeframe:
-            self.update_status_label("No Ticker Selected", None)
-            return
+            keltner_params = {"period": params[0], "multiplier": params[1]}
+            rvi_params = {"period": params[2], "thresholds": {"lower": params[3], "upper": params[4]}}
+            include_15m_rvi = bool(params[5])
 
-        # Define the worker task
-        def task():
-            include_15m_rvi = self.db_manager.fetch_include_15m_rvi(self.current_symbol, self.current_timeframe)
+            # Step 3: Calculate and store indicators
+            signal_generator = SignalGenerator(db_manager=self.db_manager)
+            signal_generator.calculate_and_store_indicators(df, keltner_params, rvi_params)
 
-            query = f"""
-                SELECT h.timestamp, h.close, h.open, h.high, h.low, h.volume,
-                    COALESCE(s.keltner_upper, 0) AS keltner_upper,
-                    COALESCE(s.keltner_lower, 0) AS keltner_lower,
-                    COALESCE(s.rvi, 0) AS rvi,
-                    COALESCE(s.keltner_signal, 0) AS keltner_signal,
-                    COALESCE(s.rvi_signal, 0) AS rvi_signal,
-                    COALESCE(s.final_signal, 0) AS final_signal
-            """
+            # Step 4: Generate signals
+            final_signals = signal_generator.generate_signals(
+                self.current_symbol,
+                self.current_timeframe,
+                include_15m_rvi=include_15m_rvi,
+            )
 
-            if include_15m_rvi:
-                query += """,
-                    COALESCE(s15.rvi, 0) AS rvi_15m
-                FROM historical_data h
-                LEFT JOIN signals_data s
-                ON h.timestamp = s.timestamp AND h.symbol = s.symbol AND h.timeframe = s.timeframe
-                LEFT JOIN signals_data s15
-                ON h.timestamp = s15.timestamp AND h.symbol = s15.symbol AND s15.timeframe = '15m'
-                """
-            else:
-                query += """
-                FROM historical_data h
-                LEFT JOIN signals_data s
-                ON h.timestamp = s.timestamp AND h.symbol = s.symbol AND h.timeframe = s.timeframe
-                """
+            if final_signals is None or final_signals.empty:
+                print("Signal generation returned an empty DataFrame.")
+                return None
 
-            query += f"""
-                WHERE h.symbol = '{self.current_symbol}' AND h.timeframe = '{self.current_timeframe}'
-                ORDER BY h.timestamp ASC
-            """
+            # Step 5: Save signals to the database
+            self.db_manager.save_signals_to_db(final_signals)
 
-            with self.db_manager.engine.connect() as connection:
-                df = pd.read_sql(query, connection)
+            # Directly call plot_data()
+            self.plot_canvas.plot_data(
+                symbol=self.current_symbol,
+                timeframe=self.current_timeframe,
+                include_15m_rvi=include_15m_rvi
+            )
 
-            print(f'Dataframe for {self.current_symbol, self.current_timeframe}')
-            print(df)
-            quit()
-
-            if df.empty:
-                return f"No data available for {self.current_symbol} ({self.current_timeframe}).", self.current_symbol, self.current_timeframe
-
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            return df, self.current_symbol, self.current_timeframe
-
-        # Create and start the worker
-        self.worker = BackgroundWorker(task)
-        self.worker.data_ready_signal.connect(self.handle_data_ready)
-        self.worker.progress_signal.connect(self.update_status_label)
-        self.worker.finished.connect(self.cleanup_worker)
-        self.worker.start()
-
-
-    def handle_data_ready(self, df, symbol, timeframe):
-        """
-        Handles data from the worker and updates the plot.
-        """
-        self.plot_canvas.plot_data(df, symbol, timeframe)
-        self.update_status_label("Data Refreshed Successfully", QDateTime.currentDateTime())
-
-    def cleanup_worker(self):
-        if hasattr(self, 'worker') and self.worker.isRunning():
-            self.worker.quit()
-            self.worker.wait()  # Ensure the thread is stopped
-            print("Background worker cleaned up.")
+        except Exception as e:
+            print(f"Error in task: {e}")
+            return None
 
     def update_status_label(self, status, last_updated=None):
         """
