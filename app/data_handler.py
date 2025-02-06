@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.database import DatabaseManager
-from app.signals import SignalGenerator
+from app.controllers.signal_generator import SignalGenerator
 
 # Configure logging
 LOG_LEVEL = "INFO"
@@ -35,13 +35,13 @@ class DataHandler:
     API_RATE_LIMIT = 1200  # Requests per minute
     MAX_RETRIES = 5
     LOOKBACK_DAYS = 365
-    MAX_WORKERS = 4
+    MAX_WORKERS = 10
     
     def __init__(self, exchange_name: str = EXCHANGE_NAME, lookback_days: int = LOOKBACK_DAYS):
         self.exchange_name = exchange_name
         self.lookback_days = lookback_days
         self.exchange = self._initialize_exchange()
-        self.db_manager = DatabaseManager(db_path="data/crypto_data.db")
+        self.db_manager = DatabaseManager()
         self.db_manager.initialize_database()
 
     def _initialize_exchange(self) -> ccxt.Exchange:
@@ -64,9 +64,10 @@ class DataHandler:
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
 
     def fetch_and_store_incremental(self, symbol: str, timeframe: str) -> bool:
-        """Manage incremental data updates with validation."""
+        """Fetch and store only fully completed OHLCV candles for different timeframes."""
         try:
             last_timestamp = self.db_manager.get_last_stored_timestamp(symbol, timeframe)
+
             if last_timestamp is None:
                 initial_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
                 since = int(initial_date.timestamp() * 1000)
@@ -74,7 +75,27 @@ class DataHandler:
             else:
                 since = last_timestamp + 1  # Avoid duplicate data
 
+            now_utc = datetime.now(timezone.utc)
+
+            if timeframe == "15m":
+                last_completed_candle = now_utc.replace(minute=(now_utc.minute // 15) * 15, second=0, microsecond=0) - timedelta(minutes=15)
+            elif timeframe == "1h":
+                last_completed_candle = now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+            elif timeframe == "1d":
+                last_completed_candle = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            elif timeframe == "1w":
+                last_completed_candle = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(weeks=1)
+            elif timeframe == "1M":  
+                last_completed_candle = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now_utc.day)
+
+            else:
+                last_completed_candle = now_utc  
+
+            end_timestamp = int(last_completed_candle.timestamp() * 1000) 
+            logger.info(f"Fetching data for {symbol} {timeframe} up to {last_completed_candle} (UTC)")
             df = self.fetch_historical_data(symbol, timeframe, since)
+            df = df[df["timestamp"] <= pd.to_datetime(end_timestamp, unit="ms", utc=True)]
+
             if not self._validate_data(df):
                 logger.warning(f"Validation failed for {symbol} {timeframe}")
                 return False
@@ -83,6 +104,7 @@ class DataHandler:
                 self.db_manager.save_to_db(df)
                 logger.info(f"Inserted {len(df)} records for {symbol} {timeframe}")
                 return True
+
             return False
         except Exception as e:
             logger.error(f"Error in fetch_and_store_incremental: {e}", exc_info=True)
@@ -172,7 +194,7 @@ class DataUpdater:
                 logger.warning("No active symbols found.")
                 return
 
-            logger.info("Executing updates for all scheduled timeframes.")
+            # logger.info("Executing updates for all scheduled timeframes.")
 
             self._execute_parallel_updates(symbols)  
             self._update_signals(symbols)  
@@ -216,15 +238,41 @@ class DataUpdater:
                     logger.error(f"Signal update failed: {e}")
 
     def _generate_and_save_signals(self, symbol: str, timeframe: str):
-        """Helper function to generate and save signals for a given symbol and timeframe."""
-        logger.info(f"Generating signals for {symbol} ({timeframe})...")
-        signal_df = self.signal_generator.generate_signals(symbol, timeframe)
+        """Generate and save indicators first, then create final trading signals."""
+        try:
+            # logger.info(f"Fetching stored parameters for {symbol} ({timeframe})...")
 
-        if signal_df is not None and not signal_df.empty:
-            self.data_handler.db_manager.save_signals_to_db(signal_df)
-            logger.info(f"Signals updated for {symbol} ({timeframe}).")
-        else:
-            logger.warning(f"No signals generated for {symbol} ({timeframe}).")
+            # Step 1: Fetch indicator parameters from the database
+            params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)
+            if not params or len(params) < 6:
+                # logger.warning(f"Missing parameters for {symbol} ({timeframe}), using defaults.")
+                keltner_params = {"period": 24, "multiplier": 3.0}
+                rvi_params = {"period": 10, "thresholds": {"lower": -0.2, "upper": 0.2}}
+                include_15m_rvi = False
+            else:
+                # Extract stored values
+                keltner_params = {"period": params[0], "multiplier": params[1]}
+                rvi_params = {"period": params[2], "thresholds": {"lower": params[3], "upper": params[4]}}
+                include_15m_rvi = bool(params[5])
+
+            # logger.info(f"Using Keltner: {keltner_params}, RVI: {rvi_params}, Include 15m RVI: {include_15m_rvi}")
+
+            # Step 2: Calculate and store indicators
+            self.signal_generator.calculate_and_store_indicators(
+                symbol, timeframe, keltner_params, rvi_params
+            )
+
+            # Step 3: Generate final signals
+            signal_df = self.signal_generator.generate_final_signals(symbol, timeframe, include_15m_rvi)
+
+            if signal_df is not None and not signal_df.empty:
+                self.data_handler.db_manager.save_signals_to_db(signal_df)
+                logger.info(f"Signals updated for {symbol} ({timeframe}).")
+            else:
+                logger.warning(f"No signals generated for {symbol} ({timeframe}).")
+
+        except Exception as e:
+            logger.error(f"Signal update failed for {symbol} ({timeframe}): {e}")
 
 
 class Scheduler:
@@ -236,10 +284,10 @@ class Scheduler:
 
     def _configure_schedules(self):
         """Schedule updates at exact quarter-hour marks."""
-        schedule.every().hour.at(":01").do(self._run_update)
-        schedule.every().hour.at(":16").do(self._run_update)
-        schedule.every().hour.at(":31").do(self._run_update)
-        schedule.every().hour.at(":46").do(self._run_update)
+        schedule.every().hour.at(":00").do(self._run_update)
+        schedule.every().hour.at(":00").do(self._run_update)
+        schedule.every().hour.at(":30").do(self._run_update)
+        schedule.every().hour.at(":45").do(self._run_update)
 
     def _run_update(self):
         """Runs an update on a separate thread to avoid blocking the scheduler."""

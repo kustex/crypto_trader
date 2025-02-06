@@ -70,19 +70,3 @@ class Indicators:
 
         # Return only the 'rvi' column
         return df[['rvi']]
-
-
-
-if __name__ == "__main__":
-    # Example usage
-    # Load a sample dataset
-    data = pd.read_csv("data/raw_data/BTC_USDT_1h.csv")
-
-    # Calculate indicators
-    indicators = Indicators()
-    keltner = indicators.calculate_keltner_channel(data)
-    rvi = indicators.calculate_rvi(data)
-
-    # Merge and display results
-    result = pd.concat([data, keltner, rvi], axis=1)
-    print(result.tail())

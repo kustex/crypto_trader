@@ -12,14 +12,12 @@ class DatabaseManager:
     Manages database operations including initialization, querying, and saving data.
     """
 
-    def __init__(self, db_path="data/crypto_data.db"):
+    def __init__(self):
         """
         Initialize the DatabaseManager.
 
         :param db_path: Path to the SQLite database file.
         """
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.POSTGRES_USER = "postgres"
         self.POSTGRES_PASSWORD = "7aGpc4Uj"  
         self.POSTGRES_DBNAME = "crypto_data"
@@ -334,6 +332,7 @@ class DatabaseManager:
             print("No indicators to save.")
             return
 
+        df = df.copy()  # ✅ Ensure df is a full copy before modifying
         df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S.%f")
 
         try:

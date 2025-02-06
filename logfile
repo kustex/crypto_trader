@@ -1,0 +1,6 @@
+2025-02-01 04:57:58.830 CET [4916] LOG:  redirecting log output to logging collector process
+2025-02-01 04:57:58.830 CET [4916] HINT:  Future log output will appear in directory "log".
+2025-02-01 05:02:24.475 CET [6876] LOG:  redirecting log output to logging collector process
+2025-02-01 05:02:24.475 CET [6876] HINT:  Future log output will appear in directory "log".
+2025-02-01 11:57:18.871 CET [9696] LOG:  redirecting log output to logging collector process
+2025-02-01 11:57:18.871 CET [9696] HINT:  Future log output will appear in directory "log".
