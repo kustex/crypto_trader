@@ -2,14 +2,14 @@ import re
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QMessageBox, QLineEdit
 from app.ui.plot_canvas import PlotCanvas
 from app.database import DatabaseManager
-from app.ui.risk_parameters import RiskManagementPanel
+from app.ui.signal_parameters import SignalManagementPanel
 from app.ui.orders_panel import OrdersPanel
 
 class TickersPanel:
-    def __init__(self, db_manager: DatabaseManager, plot_canvas: PlotCanvas, risk_panel: RiskManagementPanel, orders_panel: OrdersPanel):
+    def __init__(self, db_manager: DatabaseManager, plot_canvas: PlotCanvas, signal_panel: SignalManagementPanel, orders_panel: OrdersPanel):
         self.db_manager = db_manager
         self.plot_canvas = plot_canvas  
-        self.risk_panel = risk_panel  
+        self.signal_panel = signal_panel 
         self.orders_panel = orders_panel  
 
         # UI Elements
@@ -129,7 +129,7 @@ class TickersPanel:
         self.current_timeframe = "1h"  
 
         self.display_graph_with_timeframe(self.current_timeframe)  
-        self.risk_panel.update_parameters(self.current_symbol, self.current_timeframe)  
+        self.signal_panel.update_parameters(self.current_symbol, self.current_timeframe)  
         self.orders_panel.reset_order_inputs(self.current_symbol) 
 
     def display_graph_with_timeframe(self, timeframe):
@@ -140,7 +140,7 @@ class TickersPanel:
             return
 
         self.current_timeframe = timeframe
-        self.risk_panel.update_parameters(self.current_symbol, self.current_timeframe)
+        self.signal_panel.update_parameters(self.current_symbol, self.current_timeframe)
         params = self.db_manager.fetch_indicator_params(self.current_symbol, self.current_timeframe)
         if not params:
             print(f"No parameters found for {self.current_symbol} ({self.current_timeframe}).")

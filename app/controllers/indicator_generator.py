@@ -7,36 +7,37 @@ class Indicators:
     """
 
     @staticmethod
-    def calculate_keltner_channel(df: pd.DataFrame, period: int, multiplier: float):
+    def calculate_keltner_channel(df: pd.DataFrame, period: int, upper_multiplier: float, lower_multiplier: float):
         """
-        Calculate the Keltner Channels for the given DataFrame.
+        Calculate the Keltner Channels for the given DataFrame using separate multipliers for upper and lower bands.
 
         :param df: DataFrame containing OHLC data (must have 'high', 'low', 'close' columns).
         :param period: The period for calculating the moving average and ATR.
-        :param multiplier: The multiplier for the ATR to calculate upper and lower bands.
+        :param upper_multiplier: The multiplier for the ATR to calculate the upper band.
+        :param lower_multiplier: The multiplier for the ATR to calculate the lower band.
         :return: DataFrame with 'keltner_upper', 'keltner_lower', and 'keltner_mid' columns.
         """
-        df = df.copy()  # Avoid modifying the original DataFrame
+        df = df.copy()  # Prevent modifying the original DataFrame
         
         # Step 1: Calculate the typical price
-        df.loc[:, 'typical_price'] = (df['high'] + df['low'] + df['close']) / 3
+        df['typical_price'] = (df['high'] + df['low'] + df['close']) / 3
 
         # Step 2: Calculate the exponential moving average (EMA) of the typical price
-        df.loc[:, 'keltner_mid'] = df['typical_price'].ewm(span=period, adjust=False).mean()
+        df['keltner_mid'] = df['typical_price'].ewm(span=period, adjust=False).mean()
 
         # Step 3: Calculate the true range and average true range (ATR)
-        df.loc[:, 'true_range'] = df[['high', 'low', 'close']].apply(
+        df['true_range'] = df[['high', 'low', 'close']].apply(
             lambda x: max(x['high'] - x['low'], abs(x['high'] - x['close']), abs(x['low'] - x['close'])),
             axis=1
         )
-        df.loc[:, 'atr'] = df['true_range'].ewm(span=period, adjust=False).mean()
+        df['atr'] = df['true_range'].ewm(span=period, adjust=False).mean()
 
-        # Step 4: Calculate the upper and lower bands
-        df.loc[:, 'keltner_upper'] = df['keltner_mid'] + (multiplier * df['atr'])
-        df.loc[:, 'keltner_lower'] = df['keltner_mid'] - (multiplier * df['atr'])
+        # Step 4: Calculate the upper and lower bands using separate multipliers
+        df['keltner_upper'] = df['keltner_mid'] + (upper_multiplier * df['atr'])
+        df['keltner_lower'] = df['keltner_mid'] - (lower_multiplier * df['atr'])
 
-        # Return only the relevant columns
         return df[['keltner_upper', 'keltner_lower', 'keltner_mid']]
+
 
 
     @staticmethod

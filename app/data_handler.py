@@ -237,33 +237,50 @@ class DataUpdater:
                 except Exception as e:
                     logger.error(f"Signal update failed: {e}")
 
-    def _generate_and_save_signals(self, symbol: str, timeframe: str):
-        """Generate and save indicators first, then create final trading signals."""
+    def _generate_and_save_signals(self, symbol, timeframe):
+        """Fetch parameters, generate indicators, and store signals dynamically."""
         try:
-            # logger.info(f"Fetching stored parameters for {symbol} ({timeframe})...")
-
-            # Step 1: Fetch indicator parameters from the database
+            logger.info(f"Fetching indicator parameters for {symbol} ({timeframe})...")
+            
+            # Step 1: Fetch indicator parameters dynamically
             params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)
-            if not params or len(params) < 6:
-                # logger.warning(f"Missing parameters for {symbol} ({timeframe}), using defaults.")
-                keltner_params = {"period": 24, "multiplier": 3.0}
-                rvi_params = {"period": 10, "thresholds": {"lower": -0.2, "upper": 0.2}}
-                include_15m_rvi = False
-            else:
-                # Extract stored values
-                keltner_params = {"period": params[0], "multiplier": params[1]}
-                rvi_params = {"period": params[2], "thresholds": {"lower": params[3], "upper": params[4]}}
-                include_15m_rvi = bool(params[5])
+            if not params:
+                logger.warning(f"No parameters found for {symbol} ({timeframe}), inserting defaults.")
+                self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  # Inserts default values
+                params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  # Re-fetch
+            
+            (
+                keltner_upper_multiplier, keltner_lower_multiplier, keltner_period,
+                rvi_15m_period, rvi_1h_period,
+                rvi_15m_upper_threshold, rvi_15m_lower_threshold,
+                rvi_1h_upper_threshold, rvi_1h_lower_threshold,
+                include_15m_rvi  
+            ) = params
 
-            # logger.info(f"Using Keltner: {keltner_params}, RVI: {rvi_params}, Include 15m RVI: {include_15m_rvi}")
+            # Step 2: Prepare parameters for calculation
+            keltner_params = {
+                "period": keltner_period,
+                "upper_multiplier": keltner_upper_multiplier,  
+                "lower_multiplier": keltner_lower_multiplier,  
+            }
+            rvi_params = {
+                "period": rvi_1h_period if timeframe == "1h" else rvi_15m_period,
+            }
 
-            # Step 2: Calculate and store indicators
-            self.signal_generator.calculate_and_store_indicators(
+            # Step 3: Calculate and store indicators
+            logger.info(f"Calculating indicators for {symbol} ({timeframe})...")
+            indicator_df = self.signal_generator.calculate_and_store_indicators(
                 symbol, timeframe, keltner_params, rvi_params
             )
 
-            # Step 3: Generate final signals
-            signal_df = self.signal_generator.generate_final_signals(symbol, timeframe, include_15m_rvi)
+            if indicator_df is None or indicator_df.empty:
+                logger.warning(f"No indicators generated for {symbol} ({timeframe}). Skipping signal generation.")
+                return
+            
+            # Step 4: Generate final signals using the DB value for `include_15m_rvi`
+            signal_df = self.signal_generator.generate_final_signals(
+                symbol, timeframe, bool(include_15m_rvi) 
+            )
 
             if signal_df is not None and not signal_df.empty:
                 self.data_handler.db_manager.save_signals_to_db(signal_df)

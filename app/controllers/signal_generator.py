@@ -7,7 +7,7 @@ class SignalGenerator:
         self.indicators = Indicators()
         self.db_manager = db_manager
 
-    def calculate_and_store_indicators(self, symbol, timeframe, keltner_params, rvi_params):
+    def calculate_and_store_indicators(self, symbol: str, timeframe: str, keltner_params: dict, rvi_params: dict):
         """
         Calculate indicators (Keltner Channels & RVI) and store them in the database.
         """
@@ -37,16 +37,20 @@ class SignalGenerator:
             # Sort data
             df = df.sort_values("timestamp").reset_index(drop=True)
 
-            # ✅ Step 1: Calculate Keltner Channels
+            # ✅ Step 1: Calculate Keltner Channels (using both upper & lower multipliers)
             keltner_df = self.indicators.calculate_keltner_channel(
-                df[["high", "low", "close"]], **keltner_params
+                df[["high", "low", "close"]],
+                period=keltner_params["period"],
+                upper_multiplier=keltner_params["upper_multiplier"],
+                lower_multiplier=keltner_params["lower_multiplier"],
             )
             df["keltner_upper"] = keltner_df["keltner_upper"]
             df["keltner_lower"] = keltner_df["keltner_lower"]
 
             # ✅ Step 2: Calculate RVI
             rvi_df = self.indicators.calculate_rvi(
-                df[["open", "high", "low", "close"]], period=rvi_params["period"]
+                df[["open", "high", "low", "close"]],
+                period=rvi_params["period"]
             )
             df["rvi"] = rvi_df["rvi"]
 
@@ -60,6 +64,7 @@ class SignalGenerator:
         except Exception as e:
             print(f"Error calculating and storing indicators: {e}")
             return None
+
 
     def generate_final_signals(self, symbol, timeframe, include_15m_rvi=False):
         """
@@ -102,7 +107,7 @@ class SignalGenerator:
 
             # Step 3: Generate trading signals
             df = self._generate_keltner_signals(df)
-            df = self._generate_rvi_signals(df)
+            df = self._generate_rvi_signals(df, symbol, timeframe)
             df = self._generate_final_signal(df, include_15m_rvi)
 
             # Step 4: Save signals to the database
@@ -122,17 +127,29 @@ class SignalGenerator:
         df.loc[df["close"] < df["keltner_lower"], "keltner_signal"] = 1   # Buy signal
         return df
 
-    def _generate_rvi_signals(self, df):
-        """Generate RVI signals based on predefined thresholds."""
+    def _generate_rvi_signals(self, df, symbol, timeframe):
+        """Generate RVI signals using thresholds from the database."""
         df["rvi_signal"] = 0
-        rvi_lower_threshold = -0.2
-        rvi_upper_threshold = 0.2
-        df.loc[df["rvi"] < rvi_lower_threshold, "rvi_signal"] = 1  
-        df.loc[df["rvi"] > rvi_upper_threshold, "rvi_signal"] = -1  
+
+        # Fetch thresholds from the database
+        params = self.db_manager.fetch_indicator_params(symbol, timeframe)
+        if not params:
+            print(f"Error: No indicator parameters found for {symbol} ({timeframe}). Using default RVI thresholds.")
+            return df
+
+        # Assign correct threshold based on timeframe
+        _, _, _, _, _, rvi_15m_upper_threshold, rvi_15m_lower_threshold, rvi_1h_upper_threshold, rvi_1h_lower_threshold, _ = params
+
+        rvi_upper_threshold = rvi_1h_upper_threshold if timeframe == "1h" else rvi_15m_upper_threshold
+        rvi_lower_threshold = rvi_1h_lower_threshold if timeframe == "1h" else rvi_15m_lower_threshold
+
+        # Apply thresholds dynamically
+        df.loc[df["rvi"] < rvi_lower_threshold, "rvi_signal"] = 1  # Buy signal
+        df.loc[df["rvi"] > rvi_upper_threshold, "rvi_signal"] = -1  # Sell signal
         return df
 
     def _fetch_15m_rvi_data(self, symbol):
-        """Fetch pre-calculated 15m RVI data."""
+        """Fetch pre-calculated 15m RVI data and apply dynamic thresholds."""
         query = f"""
             SELECT timestamp, rvi AS rvi_15m
             FROM indicator_historical_data
@@ -148,12 +165,19 @@ class SignalGenerator:
         df_15m["timestamp"] = pd.to_datetime(df_15m["timestamp"])
         df_15m["rvi_signal_15m"] = 0
 
-        rvi_lower_threshold = -0.2
-        rvi_upper_threshold = 0.2
-        df_15m.loc[df_15m["rvi_15m"] < rvi_lower_threshold, "rvi_signal_15m"] = 1
-        df_15m.loc[df_15m["rvi_15m"] > rvi_upper_threshold, "rvi_signal_15m"] = -1
+        # Fetch RVI thresholds for 15m
+        params = self.db_manager.fetch_indicator_params(symbol, "15m")
+        if not params:
+            print(f"Error: No indicator parameters found for {symbol} (15m). Using default thresholds.")
+            rvi_15m_lower_threshold, rvi_15m_upper_threshold = -0.2, 0.2
+        else:
+            _, _, _, _, _, rvi_15m_upper_threshold, rvi_15m_lower_threshold, _, _, _ = params
 
+        # Apply 15m RVI thresholds dynamically
+        df_15m.loc[df_15m["rvi_15m"] < rvi_15m_lower_threshold, "rvi_signal_15m"] = 1  # Buy
+        df_15m.loc[df_15m["rvi_15m"] > rvi_15m_upper_threshold, "rvi_signal_15m"] = -1  # Sell
         return df_15m[["timestamp", "rvi_signal_15m"]]
+
 
     def _merge_15m_rvi(self, df, df_15m):
         """Merge 15m RVI data with the main DataFrame."""

@@ -106,12 +106,16 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS indicator_params (
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
+                keltner_upper_multiplier DOUBLE PRECISION DEFAULT 3.0,
+                keltner_lower_multiplier DOUBLE PRECISION DEFAULT 3.0,
                 keltner_period INTEGER DEFAULT 24,
-                keltner_multiplier DOUBLE PRECISION DEFAULT 2.0,
-                rvi_period INTEGER DEFAULT 24,
-                rvi_lower_threshold DOUBLE PRECISION DEFAULT -0.2,
-                rvi_upper_threshold DOUBLE PRECISION DEFAULT 0.2,
-                include_15m_rvi INTEGER DEFAULT 1,
+                rvi_15m_period INTEGER DEFAULT 10,
+                rvi_1h_period INTEGER DEFAULT 10,
+                rvi_15m_upper_threshold DOUBLE PRECISION DEFAULT 0.2,
+                rvi_15m_lower_threshold DOUBLE PRECISION DEFAULT -0.2,
+                rvi_1h_upper_threshold DOUBLE PRECISION DEFAULT 0.2,
+                rvi_1h_lower_threshold DOUBLE PRECISION DEFAULT -0.2,
+                include_15m_rvi INTEGER DEFAULT 1,  -- ✅ Added this column
                 PRIMARY KEY (symbol, timeframe)
             )
             """,
@@ -130,7 +134,7 @@ class DatabaseManager:
         with self.engine.connect() as connection:
             for query in queries:
                 connection.execute(text(query))
-            connection.commit()  
+            connection.commit()
 
         print("Database initialized with all tables.")
 
@@ -430,35 +434,55 @@ class DatabaseManager:
                 default_params["partial_sell_fraction"]
             )
 
-
-    def save_indicator_params(
-        self, symbol, timeframe, keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi
-    ):
+    def save_indicator_params(self, symbol, timeframe,
+                            keltner_upper_multiplier, keltner_lower_multiplier, keltner_period,
+                            rvi_15m_period, rvi_1h_period,
+                            rvi_15m_upper_threshold, rvi_15m_lower_threshold,
+                            rvi_1h_upper_threshold, rvi_1h_lower_threshold,
+                            include_15m_rvi=1):  
         """
         Save or update indicator parameters for a given symbol and timeframe.
         """
         query = text("""
-            INSERT INTO indicator_params (symbol, timeframe, keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi)
-            VALUES (:symbol, :timeframe, :keltner_period, :keltner_multiplier, :rvi_period, :rvi_lower_threshold, :rvi_upper_threshold, :include_15m_rvi)
+            INSERT INTO indicator_params (symbol, timeframe, 
+                                        keltner_upper_multiplier, keltner_lower_multiplier, keltner_period,
+                                        rvi_15m_period, rvi_1h_period,
+                                        rvi_15m_upper_threshold, rvi_15m_lower_threshold,
+                                        rvi_1h_upper_threshold, rvi_1h_lower_threshold,
+                                        include_15m_rvi)
+            VALUES (:symbol, :timeframe, 
+                    :keltner_upper_multiplier, :keltner_lower_multiplier, :keltner_period,
+                    :rvi_15m_period, :rvi_1h_period,
+                    :rvi_15m_upper_threshold, :rvi_15m_lower_threshold,
+                    :rvi_1h_upper_threshold, :rvi_1h_lower_threshold,
+                    :include_15m_rvi)
             ON CONFLICT(symbol, timeframe) DO UPDATE SET
+                keltner_upper_multiplier = EXCLUDED.keltner_upper_multiplier,
+                keltner_lower_multiplier = EXCLUDED.keltner_lower_multiplier,
                 keltner_period = EXCLUDED.keltner_period,
-                keltner_multiplier = EXCLUDED.keltner_multiplier,
-                rvi_period = EXCLUDED.rvi_period,
-                rvi_lower_threshold = EXCLUDED.rvi_lower_threshold,
-                rvi_upper_threshold = EXCLUDED.rvi_upper_threshold,
-                include_15m_rvi = EXCLUDED.include_15m_rvi
+                rvi_15m_period = EXCLUDED.rvi_15m_period,
+                rvi_1h_period = EXCLUDED.rvi_1h_period,
+                rvi_15m_upper_threshold = EXCLUDED.rvi_15m_upper_threshold,
+                rvi_15m_lower_threshold = EXCLUDED.rvi_15m_lower_threshold,
+                rvi_1h_upper_threshold = EXCLUDED.rvi_1h_upper_threshold,
+                rvi_1h_lower_threshold = EXCLUDED.rvi_1h_lower_threshold,
+                include_15m_rvi = EXCLUDED.include_15m_rvi;
         """)
-        
+
         with self.engine.begin() as connection:
             connection.execute(query, {
                 "symbol": symbol,
                 "timeframe": timeframe,
+                "keltner_upper_multiplier": keltner_upper_multiplier,
+                "keltner_lower_multiplier": keltner_lower_multiplier,
                 "keltner_period": keltner_period,
-                "keltner_multiplier": keltner_multiplier,
-                "rvi_period": rvi_period,
-                "rvi_lower_threshold": rvi_lower_threshold,
-                "rvi_upper_threshold": rvi_upper_threshold,
-                "include_15m_rvi": include_15m_rvi
+                "rvi_15m_period": rvi_15m_period,
+                "rvi_1h_period": rvi_1h_period,
+                "rvi_15m_upper_threshold": rvi_15m_upper_threshold,
+                "rvi_15m_lower_threshold": rvi_15m_lower_threshold,
+                "rvi_1h_upper_threshold": rvi_1h_upper_threshold,
+                "rvi_1h_lower_threshold": rvi_1h_lower_threshold,
+                "include_15m_rvi": include_15m_rvi  
             })
 
         print(f"Parameters saved for {symbol} ({timeframe}).")
@@ -470,7 +494,11 @@ class DatabaseManager:
         If no parameters exist, save default parameters and return them.
         """
         query = text("""
-            SELECT keltner_period, keltner_multiplier, rvi_period, rvi_lower_threshold, rvi_upper_threshold, include_15m_rvi
+            SELECT keltner_upper_multiplier, keltner_lower_multiplier, keltner_period,
+                rvi_15m_period, rvi_1h_period,
+                rvi_15m_upper_threshold, rvi_15m_lower_threshold,
+                rvi_1h_upper_threshold, rvi_1h_lower_threshold,
+                COALESCE(include_15m_rvi, 1) 
             FROM indicator_params
             WHERE symbol = :symbol AND timeframe = :timeframe
         """)
@@ -479,38 +507,31 @@ class DatabaseManager:
             result = connection.execute(query, {"symbol": symbol, "timeframe": timeframe}).fetchone()
 
         if result:
-            return result
+            return list(result)  # ✅ Ensure 10 values are always returned
+
         else:
-            # Save default parameters if none exist
+            # ✅ Insert default parameters if they don’t exist
             default_params = {
                 "symbol": symbol,
                 "timeframe": timeframe,
+                "keltner_upper_multiplier": 3.0,
+                "keltner_lower_multiplier": 3.0,
                 "keltner_period": 24,
-                "keltner_multiplier": 2.0,
-                "rvi_period": 24,
-                "rvi_lower_threshold": -0.2,
-                "rvi_upper_threshold": 0.2,
+                "rvi_15m_period": 10,
+                "rvi_1h_period": 10,
+                "rvi_15m_upper_threshold": 0.2,
+                "rvi_15m_lower_threshold": -0.2,
+                "rvi_1h_upper_threshold": 0.2,
+                "rvi_1h_lower_threshold": -0.2,
                 "include_15m_rvi": 1  
             }
+
             print(f"Inserting default parameters for {symbol} ({timeframe}).")
-            self.save_indicator_params(
-                default_params["symbol"],
-                default_params["timeframe"],
-                default_params["keltner_period"],
-                default_params["keltner_multiplier"],
-                default_params["rvi_period"],
-                default_params["rvi_lower_threshold"],
-                default_params["rvi_upper_threshold"],
-                default_params["include_15m_rvi"]
-            )
-            return (
-                default_params["keltner_period"],
-                default_params["keltner_multiplier"],
-                default_params["rvi_period"],
-                default_params["rvi_lower_threshold"],
-                default_params["rvi_upper_threshold"],
-                default_params["include_15m_rvi"]
-            )
+            self.save_indicator_params(**default_params)
+            
+            # ✅ Ensure we return exactly 10 values
+            return list(default_params.values())[2:]  # Skip `symbol` and `timeframe`
+
 
     def fetch_include_15m_rvi(self, symbol: str, timeframe: str) -> bool:
         """
@@ -551,8 +572,6 @@ class DatabaseManager:
             print(f"No data found for {symbol} ({timeframe}).")
         
         return None
-
-
 
     def query_data(self, symbol: str, timeframe: str, start: str = None, end: str = None) -> pd.DataFrame:
         """
