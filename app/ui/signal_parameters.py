@@ -18,7 +18,11 @@ class SignalManagementPanel:
         self.save_params_button = QPushButton("Save Parameters")
         self.save_params_button.clicked.connect(self.handle_save_button)  # ✅ FIXED
 
-        self.layout.addWidget(QLabel("Indicator Settings"))
+        # Section Label
+        # self.indicator_label= QLabel("Indicator Settings")
+        # self.indicator_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+        # self.layout.addWidget(self.indicator_label)
+
         self.layout.addWidget(self.include_15m_rvi_checkbox)
         self.layout.addLayout(self.param_grid)
         self.layout.addWidget(self.save_params_button)
@@ -27,7 +31,7 @@ class SignalManagementPanel:
         self.current_symbol = None
         self.current_timeframe = None
 
-    def update_parameters(self, symbol, timeframe):
+    def update_signal_parameters(self, symbol, timeframe):
         """
         Fetch and update parameters for the selected ticker and timeframe.
         """

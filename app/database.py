@@ -389,7 +389,7 @@ class DatabaseManager:
                     "partial_sell_fraction": partial_sell_fraction
                 })
 
-            print(f"Risk parameters saved for {symbol}.")
+            # print(f"Risk parameters saved for {symbol}.")
 
         except Exception as e:
             print(f"Error saving risk parameters: {e}")
@@ -419,7 +419,6 @@ class DatabaseManager:
                 "max_allocation": 0.20,  
                 "partial_sell_fraction": 0.2,  
             }
-            print(f"Inserting default risk parameters for {symbol}.")
             self.save_risk_params(
                 default_params["symbol"],
                 default_params["stoploss"],
@@ -484,9 +483,6 @@ class DatabaseManager:
                 "rvi_1h_lower_threshold": rvi_1h_lower_threshold,
                 "include_15m_rvi": include_15m_rvi  
             })
-
-        print(f"Parameters saved for {symbol} ({timeframe}).")
-
 
     def fetch_indicator_params(self, symbol, timeframe):
         """

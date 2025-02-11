@@ -5,17 +5,15 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-
 class TradeExecutor:
     """
     A class to interact with the Bitget exchange using CCXT for trading.
     """
-
     PORTFOLIO_FILE = "data/portfolio.json"
 
     def __init__(self, api_key, api_secret, passphrase, testnet=False):
         """
-        Initialize the Bitget client.
+        Initialize the Bitget client and load persisted state.
         """
         self.api_key = api_key
         self.api_secret = api_secret
@@ -33,14 +31,16 @@ class TradeExecutor:
         if testnet:
             self.exchange.set_sandbox_mode(True)
 
-        self.portfolio = {}
-        self.completed_trades = []
-
-        # NEW: Set to track already processed closed order IDs
-        self.processed_order_ids = set()
+        # State variables
+        self.portfolio = {}          # Open positions and related data
+        self.completed_trades = []   # List of completed trades with PnL details
+        self.processed_order_ids = set()  # IDs of closed orders that have been processed
 
         # Setup logging
         self._setup_logging()
+
+        # Load previously saved state from JSON files
+        self._load_state()
 
     def _setup_logging(self):
         """Configure logging for trade execution."""
@@ -50,14 +50,48 @@ class TradeExecutor:
             format="%(asctime)s - %(levelname)s - %(message)s"
         )
 
+    def _save_json(self, filename, data):
+        """Helper method to ensure the data folder exists and save JSON data."""
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def _load_json(self, filename):
+        """Helper method to load JSON data if the file exists."""
+        if os.path.exists(filename):
+            with open(filename, "r") as f:
+                return json.load(f)
+        return None
+
+    def _load_state(self):
+        """Load state from JSON files so we don't duplicate orders, trades, and positions."""
+        try:
+            # Load closed orders (if needed, you might want to store them for reference)
+            closed_orders = self._load_json("data/closed_orders.json")
+            if closed_orders:
+                # If closed orders have an 'id', add them to processed_order_ids
+                for order in closed_orders:
+                    if "id" in order:
+                        self.processed_order_ids.add(order["id"])
+            # Load completed trades
+            loaded_trades = self._load_json("data/completed_trades.json")
+            if loaded_trades:
+                self.completed_trades = loaded_trades
+            # Load portfolio data
+            loaded_portfolio = self._load_json("data/portfolio.json")
+            if loaded_portfolio:
+                self.portfolio = loaded_portfolio
+
+            logging.info("State loaded successfully from JSON files.")
+        except Exception as e:
+            logging.error(f"Error loading state from JSON files: {e}")
+
     def get_closed_orders(self):
         """Fetch all closed orders and ensure correct size representation."""
         try:
             closed_orders = self.exchange.fetch_closed_orders()
             orders = []
-
             for order in closed_orders:
-                # Get the unique order ID (ensure your exchange provides this)
                 order_id = order.get("id", None)
                 timestamp = order.get("timestamp", 0)
                 formatted_datetime = (
@@ -72,7 +106,6 @@ class TradeExecutor:
                 amount = float(order.get("amount", 0))
                 cost = float(order.get("cost", amount * price_avg))  # Default if cost missing
 
-                # Convert size to quote currency (for limit orders, use amount * price_avg)
                 if order_type == "limit":
                     size = amount * price_avg  
                 else:
@@ -90,8 +123,8 @@ class TradeExecutor:
                     "timestamp": timestamp,
                 })
 
-            # Sort orders by timestamp (oldest first)
             co = sorted(orders, key=lambda x: x["timestamp"], reverse=False)
+            self._save_json("data/closed_orders.json", co)
             return co 
         except Exception as e:
             logging.error(f"Error fetching closed orders: {e}")
@@ -105,11 +138,11 @@ class TradeExecutor:
                 "size": round(data["total_quantity"], 2),
                 "avg_price": round(data["avg_price"], 2) if data["total_quantity"] > 0 else 0,
             }
-            # for symbol, data in portfolio.items() if data["total_quantity"] > 0
             for symbol, data in self.portfolio.items() if data["total_quantity"] > 0
         ]
-
+        self._save_json("data/open_positions.json", open_positions)
         return open_positions  
+
     def fetch_completed_trades_with_pnl(self):
         """Fetch closed trades and calculate realized PnL correctly while updating the portfolio
         using delta updates. This method updates the portfolio with new buy orders by recalculating
@@ -119,90 +152,66 @@ class TradeExecutor:
 
         for order in closed_orders:
             order_id = order.get("id")
-            # Skip if the order has no id or has already been processed.
             if order_id is None or order_id in self.processed_order_ids:
                 continue
 
             symbol = order["symbol"]
-            size = float(order["size"])           # quantity involved in this order
-            trade_price = float(order["priceAvg"])  # executed price for this order
+            size = float(order["size"])          
+            trade_price = float(order["priceAvg"])  
             side = order["side"]
             timestamp = order["timestamp"]
             base_currency, quote_currency = symbol.split("/")
 
-            # Ensure the portfolio entry exists for a buy order.
-            # For a sell order, if the symbol is missing, we cannot process it.
             if symbol not in self.portfolio:
                 if side == "buy":
-                    # Initialize portfolio entry for new buy
                     self.portfolio[symbol] = {"avg_price": 0.0, "total_quantity": 0.0}
                 else:
-                    # Sell order for an unknown symbol: skip or log a warning.
                     continue
 
             current_qty = self.portfolio[symbol]["total_quantity"]
             current_avg_price = self.portfolio[symbol]["avg_price"]
 
             if side == "buy":
-                # Recalculate weighted average price for the position
                 new_total_qty = current_qty + size
-                # Avoid division by zero; if current_qty is zero, the new_avg_price is just the trade price.
                 new_avg_price = (
                     ((current_avg_price * current_qty) + (trade_price * size)) / new_total_qty
                     if new_total_qty else trade_price
                 )
-                # Update portfolio entry with new totals
                 self.portfolio[symbol]["total_quantity"] = new_total_qty
                 self.portfolio[symbol]["avg_price"] = new_avg_price
 
-                # Optionally, if you have special handling (e.g. for USDT/EUR adjustments), add it here.
-                # For example:
                 if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
                     self.portfolio["USDT/EUR"]["total_quantity"] -= size
 
             elif side == "sell":
                 if current_qty <= 0:
-                    # Nothing to sell; skip or log a warning.
                     continue
-
-                # Determine the effective quantity to sell (if the order size is larger than our position, limit to what we have)
                 effective_sell_qty = min(size, current_qty)
-                # Calculate realized PnL: (sell_price - average_buy_price) * quantity sold
-                # realized_pnl = (trade_price - current_avg_price) * effective_sell_qty
-                # Calculate PnL percentage relative to the average buy price
                 pnl_percent = ((trade_price - current_avg_price) / current_avg_price * 100) if current_avg_price else 0
-
                 new_total_qty = current_qty - effective_sell_qty
-
                 if new_total_qty > 0:
-                    # For a partial sale, the average price remains the same.
                     self.portfolio[symbol]["total_quantity"] = new_total_qty
                 else:
-                    # Position completely closed—remove the symbol from the portfolio.
                     del self.portfolio[symbol]
-
                 self.completed_trades.append({
                     "timestamp": timestamp,
                     "symbol": symbol,
                     "buy_price": round(current_avg_price, 6),
                     "sell_price": round(trade_price, 6),
                     "size": round(effective_sell_qty, 6),
-                    # "pnl_usdt": round(realized_pnl, 6),
                     "pnl_percent": round(pnl_percent, 2)
                 })
 
-                # Optionally, if you have special adjustments for other symbols (e.g., USDT/EUR), process them here.
-                # For example:
                 if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
                     self.portfolio["USDT/EUR"]["total_quantity"] += effective_sell_qty
 
             # Mark this order as processed.
             self.processed_order_ids.add(order_id)
 
-        # Sort the completed trades by timestamp (oldest first) for display consistency.
         self.completed_trades.sort(key=lambda x: x["timestamp"], reverse=False)
+        self._save_json("data/completed_trades.json", self.completed_trades)
+        self._save_json("data/portfolio.json", self.portfolio)
         return self.completed_trades
-
 
     def get_current_price(self, symbol):
         """Fetch the latest market price for the given symbol."""

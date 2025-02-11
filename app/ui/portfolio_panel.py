@@ -12,7 +12,7 @@ class PortfolioPanel(QWidget):
 
         # Open Positions Label
         self.open_positions_label = QLabel("Open Positions")
-        self.open_positions_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.open_positions_label.setStyleSheet("font-size: 10px;")
         self.layout.addWidget(self.open_positions_label)
 
         # Table for Open Positions
@@ -23,7 +23,7 @@ class PortfolioPanel(QWidget):
 
         # Closed Orders Label
         self.closed_orders_label = QLabel("Closed Orders")
-        self.closed_orders_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.closed_orders_label.setStyleSheet("font-size: 10px;")
         self.layout.addWidget(self.closed_orders_label)
 
         # Table for Closed Orders
@@ -34,7 +34,7 @@ class PortfolioPanel(QWidget):
 
         # Completed Trades Label
         self.completed_trades_label= QLabel("Completed Trades")
-        self.completed_trades_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.completed_trades_label.setStyleSheet("font-size: 10px;")
         self.layout.addWidget(self.completed_trades_label)
 
         # Completed Trades (PnL) Table
@@ -49,7 +49,6 @@ class PortfolioPanel(QWidget):
     def update_closed_orders(self):
         """Fetch and update closed orders sorted by time."""
         closed_orders = self.trade_executor.get_closed_orders()[::-1]
-        # print(closed_orders[:5])
         self.closed_orders_table.setRowCount(len(closed_orders))
 
         for row, order in enumerate(closed_orders):
@@ -64,7 +63,6 @@ class PortfolioPanel(QWidget):
     def update_completed_trades(self):
         """Fetch and display completed trades with realized PnL, sorted by time."""
         completed_trades = self.trade_executor.fetch_completed_trades_with_pnl()
-        # print(completed_trades[:5])
 
         # ✅ Sort by time before displaying
         completed_trades = sorted(completed_trades, key=lambda x: x["timestamp"], reverse=True)
@@ -88,14 +86,7 @@ class PortfolioPanel(QWidget):
     def update_open_positions(self):
         """Track open positions correctly, accounting for partial sells."""
         open_positions = self.trade_executor.fetch_open_positions()
-        # print('--------------------------------- OPEN POSITIONS --------------------------------------')
 
-        # print(open_positions)
-
-        # print('\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\')
-        # print('\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\')
-        # print('\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\')
-        
         self.open_positions_table.setRowCount(len(open_positions))
         self.open_positions_table.setColumnCount(6)  
         self.open_positions_table.setHorizontalHeaderLabels(["Symbol", "Total (USDT)", "Avg Buy Price", "Current Price", "PnL (USDT)", "PnL %"])
@@ -109,7 +100,6 @@ class PortfolioPanel(QWidget):
             if current_price is None:
                 current_price = avg_price 
 
-            # ✅ Unrealized PnL Calculation (CORRECTED)
             unrealized_pnl = size_in_usdt * ((current_price / avg_price) - 1)  
             pnl_percent = (unrealized_pnl / size_in_usdt) * 100 if size_in_usdt > 0 else 0
 

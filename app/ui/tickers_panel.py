@@ -3,18 +3,21 @@ from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
 from app.ui.plot_canvas import PlotCanvas
 from app.database import DatabaseManager
 from app.ui.signal_parameters import SignalManagementPanel
+from app.ui.risk_parameters import RiskManagementPanel
 from app.ui.orders_panel import OrdersPanel
 
 class TickersPanel:
-    def __init__(self, db_manager: DatabaseManager, plot_canvas: PlotCanvas, signal_panel: SignalManagementPanel, orders_panel: OrdersPanel):
+    def __init__(self, db_manager: DatabaseManager, plot_canvas: PlotCanvas, 
+                 signal_panel: SignalManagementPanel, orders_panel: OrdersPanel, risk_panel: RiskManagementPanel):
         self.db_manager = db_manager
         self.plot_canvas = plot_canvas  
         self.signal_panel = signal_panel 
         self.orders_panel = orders_panel  
+        self.risk_panel = risk_panel
 
         # UI Elements
         self.layout = QVBoxLayout()
-        self.ticker_label = QLabel("Tickers")
+        # self.ticker_label = QLabel("Tickers")
         self.ticker_table = QTableWidget()
         self.ticker_table.setColumnCount(3)
         self.ticker_table.setHorizontalHeaderLabels(["Ticker", "Last Price", "24h % Change"])
@@ -31,7 +34,7 @@ class TickersPanel:
         self.remove_ticker_button.clicked.connect(self.remove_selected_ticker)
 
         # Add elements to layout
-        self.layout.addWidget(self.ticker_label)
+        # self.layout.addWidget(self.ticker_label)
         self.layout.addWidget(self.ticker_table)
         self.layout.addWidget(self.ticker_input)
         self.layout.addWidget(self.add_ticker_button)
@@ -128,9 +131,14 @@ class TickersPanel:
         self.current_symbol = selected_items[0].text()
         self.current_timeframe = "1h"  
 
-        self.display_graph_with_timeframe(self.current_timeframe)  
-        self.signal_panel.update_parameters(self.current_symbol, self.current_timeframe)  
-        self.orders_panel.reset_order_inputs(self.current_symbol) 
+        # Update the graph
+        self.display_graph_with_timeframe(self.current_timeframe)
+        # Update signal parameters
+        self.signal_panel.update_signal_parameters(self.current_symbol, self.current_timeframe)
+        # Reset orders panel for the new ticker
+        self.orders_panel.reset_order_inputs(self.current_symbol)
+        # **Update the risk parameters panel**
+        self.risk_panel.update_risk_parameters(self.current_symbol)
 
     def display_graph_with_timeframe(self, timeframe):
         """
@@ -140,7 +148,7 @@ class TickersPanel:
             return
 
         self.current_timeframe = timeframe
-        self.signal_panel.update_parameters(self.current_symbol, self.current_timeframe)
+        self.signal_panel.update_signal_parameters(self.current_symbol, self.current_timeframe)
         params = self.db_manager.fetch_indicator_params(self.current_symbol, self.current_timeframe)
         if not params:
             print(f"No parameters found for {self.current_symbol} ({self.current_timeframe}).")
