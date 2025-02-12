@@ -18,7 +18,7 @@ class SignalWorker(QThread):
         """Run signal generation in a background thread."""
         try:
             df = self.db_manager.query_data(self.symbol, self.timeframe)
-            print(df)
+            # print(df)
             if df is None or df.empty:
                 self.error.emit(f"No data available for {self.symbol} ({self.timeframe}).")
                 return

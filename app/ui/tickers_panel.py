@@ -1,29 +1,33 @@
 import re
-from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QMessageBox, QLineEdit
+from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QMessageBox, QLineEdit, QAbstractItemView
 from app.ui.plot_canvas import PlotCanvas
 from app.database import DatabaseManager
 from app.ui.signal_parameters import SignalManagementPanel
 from app.ui.risk_parameters import RiskManagementPanel
 from app.ui.orders_panel import OrdersPanel
+from app.executor import TradeExecutor
+
 
 class TickersPanel:
     def __init__(self, db_manager: DatabaseManager, plot_canvas: PlotCanvas, 
-                 signal_panel: SignalManagementPanel, orders_panel: OrdersPanel, risk_panel: RiskManagementPanel):
+                 signal_panel: SignalManagementPanel, orders_panel: OrdersPanel, risk_panel: RiskManagementPanel, trade_executor: TradeExecutor):
         self.db_manager = db_manager
         self.plot_canvas = plot_canvas  
         self.signal_panel = signal_panel 
         self.orders_panel = orders_panel  
         self.risk_panel = risk_panel
+        self.trade_executor = trade_executor
 
         # UI Elements
         self.layout = QVBoxLayout()
-        # self.ticker_label = QLabel("Tickers")
         self.ticker_table = QTableWidget()
         self.ticker_table.setColumnCount(3)
         self.ticker_table.setHorizontalHeaderLabels(["Ticker", "Last Price", "24h % Change"])
+        self.ticker_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.ticker_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.ticker_table.itemSelectionChanged.connect(self.on_ticker_selected) 
 
-                # Input for adding tickers
+        # Input for adding tickers
         self.ticker_input = QLineEdit()
         self.ticker_input.setPlaceholderText("Enter ticker (e.g., BTC/USDT)")
 
@@ -88,10 +92,9 @@ class TickersPanel:
         Load unique tickers from the database and set up a default selection.
         """
         tickers = self.db_manager.fetch_tickers()
-
         self.ticker_table.setRowCount(len(tickers))
         for i, symbol in enumerate(tickers["symbol"]):
-            last_price = self.get_last_price(symbol)
+            last_price = self.trade_executor.get_current_price(symbol)
             change_24h = self.calculate_24h_change(symbol)
 
             self.ticker_table.setItem(i, 0, QTableWidgetItem(symbol))
@@ -162,21 +165,4 @@ class TickersPanel:
             include_15m_rvi=include_15m_rvi
         )
 
-    def load_tickers(self):
-        """
-        Load unique tickers from the database and set up a default selection.
-        """
-        tickers = self.db_manager.fetch_tickers()
 
-        self.ticker_table.setRowCount(len(tickers))
-        for i, symbol in enumerate(tickers["symbol"]):
-            last_price = self.get_last_price(symbol)
-            change_24h = self.calculate_24h_change(symbol)
-
-            self.ticker_table.setItem(i, 0, QTableWidgetItem(symbol))
-            self.ticker_table.setItem(i, 1, QTableWidgetItem(f"{last_price:.2f}" if last_price else "N/A"))
-            self.ticker_table.setItem(i, 2, QTableWidgetItem(f"{change_24h:.2f}%" if change_24h else "N/A"))
-
-        if len(tickers) > 0:
-            self.ticker_table.selectRow(0)
-            self.current_symbol = tickers["symbol"].iloc[0] 

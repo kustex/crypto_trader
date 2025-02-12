@@ -21,11 +21,6 @@ class OrdersPanel:
         # Create main layout
         self.layout = QVBoxLayout()
 
-        # Section Label
-        # self.order_label = QLabel("Manual Orders")
-        # self.order_label.setStyleSheet("font-weight: bold; font-size: 16px;")
-        # self.layout.addWidget(self.order_label)
-
         # Order Type Selection
         self.order_type_combo = QComboBox()
         self.order_type_combo.addItems(["Market", "Limit"])
@@ -40,17 +35,13 @@ class OrdersPanel:
         self.layout.addWidget(self.limit_price_input)
 
         # Order Amount Input
-        # self.order_amount_label = QLabel("Order Amount:")
         self.order_amount_input = QLineEdit()
         self.order_amount_input.setPlaceholderText("Enter order amount")
-        # self.layout.addWidget(self.order_amount_label)
         self.layout.addWidget(self.order_amount_input)
 
         # Dollar Amount Input
-        # self.dollar_amount_label = QLabel("Dollar Amount (Market Only):")
         self.dollar_amount_input = QLineEdit()
         self.dollar_amount_input.setPlaceholderText("Enter amount in USD")
-        # self.layout.addWidget(self.dollar_amount_label)
         self.layout.addWidget(self.dollar_amount_input)
 
         # Buy & Sell Buttons
@@ -75,8 +66,7 @@ class OrdersPanel:
         Reset order-related UI fields when a new ticker is selected.
         """
         self.selected_ticker = selected_ticker
-        # self.order_label.setText(f"Selected Ticker: {self.selected_ticker}")
-        self.order_type_combo.setCurrentIndex(0)  # Reset to "Market"
+        self.order_type_combo.setCurrentIndex(0)  
         self.limit_price_input.clear()
         self.limit_price_input.setVisible(False)
         self.order_amount_input.clear()
@@ -98,7 +88,7 @@ class OrdersPanel:
                         self.dollar_amount_input.setText(f"{dollar_amount:.2f}")
                         self.dollar_amount_input.blockSignals(False)
                     except ValueError:
-                        pass  # Ignore invalid input
+                        pass  
 
     def update_order_amount(self):
         """
@@ -116,7 +106,7 @@ class OrdersPanel:
                         self.order_amount_input.setText(f"{order_amount:.8f}")
                         self.order_amount_input.blockSignals(False)
                     except ValueError:
-                        pass  # Ignore invalid input
+                        pass  
 
     def on_order_type_changed(self, index):
         """
@@ -250,7 +240,7 @@ class OrdersPanel:
                     symbol=self.selected_ticker,
                     order_type="market",
                     side="sell",
-                    amount=base_amount  # Amount in base currency
+                    amount=base_amount  
                 )
             else:  # Limit order
                 # Validate order amount in base currency

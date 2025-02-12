@@ -13,11 +13,6 @@ class RiskManagementPanel:
         # Main vertical layout for the panel
         self.layout = QVBoxLayout()
 
-        # Section Label
-        # self.risk_label = QLabel("Risk Parameters")
-        # self.risk_label.setStyleSheet("font-weight: bold; font-size: 16px;")
-        # self.layout.addWidget(self.risk_label)
-
         # Create a grid layout to hold the risk parameter labels and input fields
         self.param_grid = QGridLayout()
         self.param_labels = []

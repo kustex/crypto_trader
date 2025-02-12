@@ -58,13 +58,12 @@ class SignalGenerator:
             indicators_df = df[["timestamp", "symbol", "timeframe", "keltner_upper", "keltner_lower", "rvi"]]
             self.db_manager.save_indicators_to_db(indicators_df)
 
-            print(f"Indicators stored for {symbol} ({timeframe}).")
+            # print(f"Indicators stored for {symbol} ({timeframe}).")
             return df  # Returning df for further processing if needed
 
         except Exception as e:
             print(f"Error calculating and storing indicators: {e}")
             return None
-
 
     def generate_final_signals(self, symbol, timeframe, include_15m_rvi=False):
         """
@@ -177,7 +176,6 @@ class SignalGenerator:
         df_15m.loc[df_15m["rvi_15m"] < rvi_15m_lower_threshold, "rvi_signal_15m"] = 1  # Buy
         df_15m.loc[df_15m["rvi_15m"] > rvi_15m_upper_threshold, "rvi_signal_15m"] = -1  # Sell
         return df_15m[["timestamp", "rvi_signal_15m"]]
-
 
     def _merge_15m_rvi(self, df, df_15m):
         """Merge 15m RVI data with the main DataFrame."""

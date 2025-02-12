@@ -1,8 +1,10 @@
 import os
 import pandas as pd
+from datetime import datetime
 from PyQt6.QtWidgets import (
     QMainWindow, QVBoxLayout, QWidget, QGridLayout, QLabel, QPushButton
 )
+from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QGroupBox, QWidget
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QDateTime
 from app.ui.plot_canvas import PlotCanvas
 from app.ui.orders_panel import OrdersPanel
@@ -13,11 +15,14 @@ from app.ui.risk_parameters import RiskManagementPanel
 from app.database import DatabaseManager
 from app.executor import TradeExecutor
 from app.controllers.signal_controller import SignalController
+from datetime import timezone, timedelta
 
 # Load Bitget API credentials
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
+LOCAL_TZ = timezone(timedelta(hours=1))
 
 
 class SignalUpdater(QThread):
@@ -64,9 +69,6 @@ class SignalUpdater(QThread):
         print("✅ Signal updates completed.")
         self.finished.emit()
 
-
-from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QGroupBox, QWidget
-
 class TickerApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -82,7 +84,11 @@ class TickerApp(QMainWindow):
         self.risk_management = RiskManagementPanel(self.db_manager)
         self.orders_panel = OrdersPanel(self.db_manager, self.trade_executor, self)
         self.portfolio_panel = PortfolioPanel(self.trade_executor, self.db_manager)
-        self.tickers_panel = TickersPanel(self.db_manager, self.plot_canvas, self.signal_management, self.orders_panel, self.risk_management)
+        self.tickers_panel = TickersPanel(self.db_manager, self.plot_canvas, self.signal_management, self.orders_panel, self.risk_management, self.trade_executor)
+
+        # # Create a notifier for UI updates.
+        # self.notifier = notifier_instance
+        # self.notifier.ui_update.connect(self.update_ui)
 
         # Create group boxes for a clear visual grouping
         tickers_group = QGroupBox("Tickers")
@@ -116,7 +122,6 @@ class TickerApp(QMainWindow):
         # Create central area for the plot canvas
         center_layout = QVBoxLayout()
         center_layout.addWidget(self.plot_canvas)
-
         # Assemble the main layout using an HBox to separate the three regions
         main_hlayout = QHBoxLayout()
         main_hlayout.addLayout(left_layout, stretch=1)
@@ -135,27 +140,39 @@ class TickerApp(QMainWindow):
         central_widget.setLayout(main_vlayout)
         self.setCentralWidget(central_widget)
 
+        # Set up a QTimer to update the UI every minute.
+        self.ui_timer = QTimer(self)
+        self.ui_timer.timeout.connect(self.update_ui)
+        self.ui_timer.start(60 * 1000)  
+
         # Load initial tickers
         self.initialize_tickers()
 
+    def update_ui(self):
+        """
+        Called every minute (by the QTimer) or by the notifier.
+        Updates:
+        - Portfolio panels (open positions, closed orders, completed trades)
+        - Graph (via plot_canvas) using the currently selected ticker and timeframe
+        - Tickers table with current live prices and 24h % change
+        - Status label with current timestamp.
+        """
+        # Update portfolio-related panels.
+        self.portfolio_panel.update_open_positions()
+        self.portfolio_panel.update_closed_orders()
+        self.portfolio_panel.update_completed_trades()
+        self.portfolio_panel.update_account_balance()
 
-    def refresh_application(self):
-        """Refresh all symbols and update the UI every minute."""
-        print("🔄 Refreshing application...")
+        # Update the graph if a ticker is selected.
+        if self.tickers_panel.current_symbol:
+            self.tickers_panel.display_graph_with_timeframe("1h")
 
-        # ✅ Step 1: Update Portfolio Data
-        self.update_portfolio()
+        # Refresh the tickers table (which now uses live prices).
+        self.tickers_panel.load_tickers()
 
-        # ✅ Step 2: Start background signal update if not already running
-        if not self.signal_updater.isRunning():
-            self.signal_updater.start()
-        else:
-            print("⚠️ SignalUpdater is already running, skipping duplicate execution.")
-
-    def on_refresh_complete(self):
-        """Update UI after background refresh is complete."""
-        self.status_label.setText(f"System Status: Updated | Last Updated: {QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')}")
-        print("✅ Application refresh completed.")
+        self.status_label.setText(
+            f"System Status: Updated at {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
     def update_portfolio(self):
         """Update portfolio panel after a trade is executed."""

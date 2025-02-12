@@ -18,16 +18,10 @@ class SignalManagementPanel:
         self.save_params_button = QPushButton("Save Parameters")
         self.save_params_button.clicked.connect(self.handle_save_button)  # ✅ FIXED
 
-        # Section Label
-        # self.indicator_label= QLabel("Indicator Settings")
-        # self.indicator_label.setStyleSheet("font-weight: bold; font-size: 16px;")
-        # self.layout.addWidget(self.indicator_label)
-
         self.layout.addWidget(self.include_15m_rvi_checkbox)
         self.layout.addLayout(self.param_grid)
         self.layout.addWidget(self.save_params_button)
 
-        # Store current ticker & timeframe to prevent errors
         self.current_symbol = None
         self.current_timeframe = None
 

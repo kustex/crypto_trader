@@ -3,7 +3,9 @@ import logging
 import json
 import os 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+LOCAL_TZ = timezone(timedelta(hours=1))
 
 class TradeExecutor:
     """
@@ -32,9 +34,9 @@ class TradeExecutor:
             self.exchange.set_sandbox_mode(True)
 
         # State variables
-        self.portfolio = {}          # Open positions and related data
-        self.completed_trades = []   # List of completed trades with PnL details
-        self.processed_order_ids = set()  # IDs of closed orders that have been processed
+        self.portfolio = {}          
+        self.completed_trades = []   
+        self.processed_order_ids = set()  
 
         # Setup logging
         self._setup_logging()
@@ -95,21 +97,26 @@ class TradeExecutor:
                 order_id = order.get("id", None)
                 timestamp = order.get("timestamp", 0)
                 formatted_datetime = (
-                    datetime.fromtimestamp(timestamp / 1000).strftime("%d/%m/%Y - %H:%M")
+                    datetime.fromtimestamp(timestamp / 1000, tz=LOCAL_TZ).strftime("%d/%m/%Y - %H:%M")
                     if timestamp else ""
                 )
                 base_currency, quote_currency = order["symbol"].split("/")
                 order_type = order.get("type", "")
                 side = order.get("side", "")
                 price = float(order.get("price", 0))
+                # Use "average" from the order for the executed price.
                 price_avg = float(order.get("average", 0))
                 amount = float(order.get("amount", 0))
-                cost = float(order.get("cost", amount * price_avg))  # Default if cost missing
-
+                # The exchange provides a "cost" field for the total cost in quote currency.
+                cost = float(order.get("cost", amount * price_avg))
+                filled = float(order.get("filled", 0))
+                
+                # For limit orders, we might calculate size differently,
+                # but for now, we'll use cost as the USDT value.
                 if order_type == "limit":
-                    size = amount * price_avg  
+                    size = cost  # or you could use filled * price_avg
                 else:
-                    size = cost  
+                    size = cost
 
                 orders.append({
                     "id": order_id,
@@ -121,6 +128,8 @@ class TradeExecutor:
                     "side": side,
                     "priceAvg": price_avg,
                     "timestamp": timestamp,
+                    "filled": filled,  # new field
+                    "cost": cost       # new field
                 })
 
             co = sorted(orders, key=lambda x: x["timestamp"], reverse=False)
@@ -144,9 +153,11 @@ class TradeExecutor:
         return open_positions  
 
     def fetch_completed_trades_with_pnl(self):
-        """Fetch closed trades and calculate realized PnL correctly while updating the portfolio
-        using delta updates. This method updates the portfolio with new buy orders by recalculating
-        the weighted average price, and for sell orders, it computes the realized PnL on the sold quantity.
+        """Fetch closed orders and calculate realized PnL while updating the portfolio
+        using delta updates. The portfolio state is maintained as:
+        - total_invested: Total USDT spent (or recovered) on the asset.
+        - units: Number of asset units held.
+        For sell orders, the realized PnL is computed based on the cost basis of the sold units.
         """
         closed_orders = self.get_closed_orders()
 
@@ -156,58 +167,84 @@ class TradeExecutor:
                 continue
 
             symbol = order["symbol"]
-            size = float(order["size"])          
-            trade_price = float(order["priceAvg"])  
             side = order["side"]
             timestamp = order["timestamp"]
+
+            # Get exchange-provided values:
+            # 'filled' is the number of asset units actually executed,
+            # 'cost' is the total USDT amount for this order.
+            filled = float(order.get("filled", 0))
+            order_cost = float(order.get("cost", filled * float(order.get("priceAvg", 0))))
+            trade_price = float(order.get("priceAvg", 0))
             base_currency, quote_currency = symbol.split("/")
 
-            if symbol not in self.portfolio:
-                if side == "buy":
-                    self.portfolio[symbol] = {"avg_price": 0.0, "total_quantity": 0.0}
-                else:
-                    continue
-
-            current_qty = self.portfolio[symbol]["total_quantity"]
-            current_avg_price = self.portfolio[symbol]["avg_price"]
-
             if side == "buy":
-                new_total_qty = current_qty + size
-                new_avg_price = (
-                    ((current_avg_price * current_qty) + (trade_price * size)) / new_total_qty
-                    if new_total_qty else trade_price
-                )
-                self.portfolio[symbol]["total_quantity"] = new_total_qty
-                self.portfolio[symbol]["avg_price"] = new_avg_price
+                # Update portfolio for a buy order.
+                if symbol not in self.portfolio:
+                    self.portfolio[symbol] = {"total_invested": 0.0, "units": 0.0}
+                current_invested = self.portfolio[symbol]["total_invested"]
+                current_units = self.portfolio[symbol]["units"]
 
+                new_total_invested = current_invested + order_cost
+                new_units = current_units + filled
+                # New average buy price calculated as total invested / total units.
+                new_avg_price = new_total_invested / new_units if new_units > 0 else trade_price
+
+                self.portfolio[symbol]["total_invested"] = new_total_invested
+                self.portfolio[symbol]["units"] = new_units
+
+                # If the quote currency is USDT and there's a USDT/EUR entry, subtract the cost.
                 if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
-                    self.portfolio["USDT/EUR"]["total_quantity"] -= size
+                    self.portfolio["USDT/EUR"]["total_invested"] -= order_cost
 
             elif side == "sell":
-                if current_qty <= 0:
+                # For sell orders, ensure the symbol exists in the portfolio.
+                if symbol not in self.portfolio:
                     continue
-                effective_sell_qty = min(size, current_qty)
-                pnl_percent = ((trade_price - current_avg_price) / current_avg_price * 100) if current_avg_price else 0
-                new_total_qty = current_qty - effective_sell_qty
-                if new_total_qty > 0:
-                    self.portfolio[symbol]["total_quantity"] = new_total_qty
+                current_invested = self.portfolio[symbol]["total_invested"]
+                current_units = self.portfolio[symbol]["units"]
+                if current_units <= 0:
+                    continue
+
+                # Determine effective units sold (should not exceed units held).
+                effective_sell_units = min(filled, current_units)
+                # Calculate average buy price from the portfolio.
+                avg_buy_price = current_invested / current_units if current_units > 0 else trade_price
+                # Cost basis for the sold units:
+                cost_basis = effective_sell_units * avg_buy_price
+                # Realized PnL in USDT:
+                realized_pnl_usdt = effective_sell_units * (trade_price - avg_buy_price)
+                pnl_percent = ((trade_price - avg_buy_price) / avg_buy_price * 100) if avg_buy_price else 0
+
+                # Update the portfolio by subtracting the sold units and the corresponding cost.
+                new_units = current_units - effective_sell_units
+                new_total_invested = current_invested - cost_basis
+                if new_units > 0:
+                    self.portfolio[symbol]["total_invested"] = new_total_invested
+                    self.portfolio[symbol]["units"] = new_units
                 else:
                     del self.portfolio[symbol]
+
+                # Append the trade record.
                 self.completed_trades.append({
                     "timestamp": timestamp,
                     "symbol": symbol,
-                    "buy_price": round(current_avg_price, 6),
+                    "buy_price": round(avg_buy_price, 6),
                     "sell_price": round(trade_price, 6),
-                    "size": round(effective_sell_qty, 6),
+                    "units_sold": round(effective_sell_units, 6),
+                    "cost_basis": round(cost_basis, 2),
+                    "pnl_usdt": round(realized_pnl_usdt, 2),
                     "pnl_percent": round(pnl_percent, 2)
                 })
 
+                # If the quote currency is USDT and there's a USDT/EUR entry, add back the cost.
                 if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
-                    self.portfolio["USDT/EUR"]["total_quantity"] += effective_sell_qty
+                    self.portfolio["USDT/EUR"]["total_invested"] += cost_basis
 
             # Mark this order as processed.
             self.processed_order_ids.add(order_id)
 
+        # Sort completed trades by timestamp (oldest first).
         self.completed_trades.sort(key=lambda x: x["timestamp"], reverse=False)
         self._save_json("data/completed_trades.json", self.completed_trades)
         self._save_json("data/portfolio.json", self.portfolio)

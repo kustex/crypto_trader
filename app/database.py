@@ -3,9 +3,10 @@ import pandas as pd
 import time
 import psycopg2
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
+
 
 class DatabaseManager:
     """
@@ -136,7 +137,7 @@ class DatabaseManager:
                 connection.execute(text(query))
             connection.commit()
 
-        print("Database initialized with all tables.")
+        # print("Database initialized with all tables.")
 
     def execute_with_retry(self, connection, query, params=None, max_retries=5, delay=1):
         """
@@ -282,7 +283,6 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error saving data to the database: {e}")
 
-
     def save_signals_to_db(self, df: pd.DataFrame):
         """
         Save the DataFrame with signals to the signals_data table.
@@ -322,7 +322,7 @@ class DatabaseManager:
                         "final_signal": row["final_signal"],
                     })
 
-            print(f"Signals saved to database ({len(df)} rows).")
+            # print(f"Signals saved to database ({len(df)} rows).")
 
         except Exception as e:
             print(f"Error saving signals to the database: {e}")
@@ -359,16 +359,12 @@ class DatabaseManager:
                         "rvi": row["rvi"],
                     })
 
-            print("Indicators saved to database.")
+            # print("Indicators saved to database.")
 
         except Exception as e:
             print(f"Error saving indicators to the database: {e}")
 
-
     def save_risk_params(self, symbol, stoploss, position_size, max_allocation, partial_sell_fraction):
-        """
-        Save or update portfolio risk parameters for a given symbol.
-        """
         query = text("""
             INSERT INTO portfolio_risk_parameters (symbol, stoploss, position_size, max_allocation, partial_sell_fraction)
             VALUES (:symbol, :stoploss, :position_size, :max_allocation, :partial_sell_fraction)
@@ -378,21 +374,15 @@ class DatabaseManager:
                 max_allocation = EXCLUDED.max_allocation,
                 partial_sell_fraction = EXCLUDED.partial_sell_fraction
         """)
-
-        try:
-            with self.engine.connect() as connection:
-                connection.execute(query, {
-                    "symbol": symbol,
-                    "stoploss": stoploss,
-                    "position_size": position_size,
-                    "max_allocation": max_allocation,
-                    "partial_sell_fraction": partial_sell_fraction
-                })
-
-            # print(f"Risk parameters saved for {symbol}.")
-
-        except Exception as e:
-            print(f"Error saving risk parameters: {e}")
+        with self.engine.connect() as connection:
+            connection.execute(query, {
+                "symbol": symbol,
+                "stoploss": stoploss,
+                "position_size": position_size,
+                "max_allocation": max_allocation,
+                "partial_sell_fraction": partial_sell_fraction
+            })
+            connection.commit()
 
     def fetch_risk_params(self, symbol):
         """
@@ -522,7 +512,7 @@ class DatabaseManager:
                 "include_15m_rvi": 1  
             }
 
-            print(f"Inserting default parameters for {symbol} ({timeframe}).")
+            # print(f"Inserting default parameters for {symbol} ({timeframe}).")
             self.save_indicator_params(**default_params)
             
             # ✅ Ensure we return exactly 10 values

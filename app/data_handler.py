@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 import ccxt
 import logging
@@ -6,30 +7,34 @@ import schedule
 import time
 import threading
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Define your local timezone (UTC+1)
+LOCAL_TZ = timezone(timedelta(hours=1))
+
+# Import your DatabaseManager and SignalGenerator from your project.
 from app.database import DatabaseManager
 from app.controllers.signal_generator import SignalGenerator
+from app.trade_bot import TradeBot
 
-# Configure logging
+# Configure logging for the data handler and updater
 LOG_LEVEL = "INFO"
 LOG_FILE = "logs/crypto_bot.log"
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler(LOG_FILE),
+              logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
+
 class DataHandler:
     """Handles fetching, validation, and storage of historical crypto data."""
-
     EXCHANGE_NAME = "binance"
     API_TIMEOUT = 30000  # 30 seconds
     API_RATE_LIMIT = 1200  # Requests per minute
@@ -57,11 +62,14 @@ class DataHandler:
         stop=stop_after_attempt(MAX_RETRIES),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((ccxt.NetworkError, ccxt.RequestTimeout)),
-        before_sleep=lambda retry_state: logger.warning(f"Retry attempt {retry_state.attempt_number} due to {retry_state.outcome.exception()}")
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retry attempt {retry_state.attempt_number} due to {retry_state.outcome.exception()}"
+        )
     )
     def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int = 1000) -> List[list]:
         """Fetch OHLCV data with retry logic."""
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
+
 
     def fetch_and_store_incremental(self, symbol: str, timeframe: str) -> bool:
         """Fetch and store only fully completed OHLCV candles for different timeframes."""
@@ -139,28 +147,25 @@ class DataHandler:
 
         return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
+
     def _validate_data(self, df: pd.DataFrame) -> bool:
         """Perform comprehensive data validation."""
         if df.empty:
             return True
-        
         required_columns = ["timestamp", "open", "high", "low", "close", "volume"]
         if not all(col in df.columns for col in required_columns):
             return False
-        
         if df.duplicated(subset=["timestamp", "symbol", "timeframe"]).any():
             logger.warning("Duplicate data detected")
             return False
-        
         if (df["volume"] < 0).any():
             logger.warning("Negative volume values detected")
             return False
-            
         return True
 
-class DataUpdater:
-    """Manages scheduled data updates and signal generation."""
 
+class DataUpdater:
+    """Manages scheduled data updates, signal generation, and triggers trade execution."""
     TIMEFRAME_CONFIG = {
         "15m": {"signal_lookback": 96},
         "1h": {"signal_lookback": 168},
@@ -171,39 +176,39 @@ class DataUpdater:
         self.data_handler = DataHandler()
         self.signal_generator = SignalGenerator(self.data_handler.db_manager)
         self.lock = threading.Lock()
-        self.first_run = True  # Forces a full update on startup
+        self.first_run = True 
+        self.trade_bot = TradeBot()
 
     def _get_active_symbols(self) -> List[str]:
-        """
-        Fetch tickers dynamically from the database.
-        """
-        return self.data_handler.db_manager.fetch_tickers()["symbol"].tolist()
+        """Fetch tickers dynamically from the database."""
+        tickers_df = self.data_handler.db_manager.fetch_tickers()
+        if tickers_df is not None and not tickers_df.empty:
+            return tickers_df["symbol"].tolist()
+        return []
 
     def run_update(self):
         """Execute update cycle with resource locking."""
         if not self.lock.acquire(blocking=False):
             logger.warning("Previous update still running. Skipping...")
             return
-
         try:
-            start_time = datetime.now(timezone.utc)
+            start_time = datetime.now(LOCAL_TZ)
             logger.info(f"Starting update cycle at {start_time}")
-
             symbols = self._get_active_symbols()
             if not symbols:
                 logger.warning("No active symbols found.")
                 return
 
-            # logger.info("Executing updates for all scheduled timeframes.")
+            self._execute_parallel_updates(symbols)
+            self._update_signals(symbols)
 
-            self._execute_parallel_updates(symbols)  
-            self._update_signals(symbols)  
+            elapsed = datetime.now(LOCAL_TZ) - start_time
+            logger.info(f"Update cycle completed in {elapsed}")
 
-            logger.info(f"Update cycle completed in {datetime.now(timezone.utc) - start_time}")
-
+            # Trigger trade logic immediately after data and signal updates.
+            self.trigger_trade_bot_if_needed(symbols)
         except Exception as e:
             logger.error(f"Critical error in update cycle: {e}", exc_info=True)
-
         finally:
             self.lock.release()
 
@@ -215,7 +220,6 @@ class DataUpdater:
                 for symbol in symbols
                 for timeframe in self.TIMEFRAME_CONFIG
             ]
-
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -230,7 +234,6 @@ class DataUpdater:
                 for symbol in symbols
                 for timeframe in self.TIMEFRAME_CONFIG
             ]
-
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -240,14 +243,12 @@ class DataUpdater:
     def _generate_and_save_signals(self, symbol, timeframe):
         """Fetch parameters, generate indicators, and store signals dynamically."""
         try:
-            logger.info(f"Fetching indicator parameters for {symbol} ({timeframe})...")
-            
             # Step 1: Fetch indicator parameters dynamically
             params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)
             if not params:
                 logger.warning(f"No parameters found for {symbol} ({timeframe}), inserting defaults.")
-                self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  # Inserts default values
-                params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  # Re-fetch
+                self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  
+                params = self.data_handler.db_manager.fetch_indicator_params(symbol, timeframe)  
             
             (
                 keltner_upper_multiplier, keltner_lower_multiplier, keltner_period,
@@ -268,7 +269,6 @@ class DataUpdater:
             }
 
             # Step 3: Calculate and store indicators
-            logger.info(f"Calculating indicators for {symbol} ({timeframe})...")
             indicator_df = self.signal_generator.calculate_and_store_indicators(
                 symbol, timeframe, keltner_params, rvi_params
             )
@@ -277,24 +277,29 @@ class DataUpdater:
                 logger.warning(f"No indicators generated for {symbol} ({timeframe}). Skipping signal generation.")
                 return
             
-            # Step 4: Generate final signals using the DB value for `include_15m_rvi`
+            # Step 4: Generate final signals using the DB value for include_15m_rvi
             signal_df = self.signal_generator.generate_final_signals(
                 symbol, timeframe, bool(include_15m_rvi) 
             )
 
             if signal_df is not None and not signal_df.empty:
                 self.data_handler.db_manager.save_signals_to_db(signal_df)
-                logger.info(f"Signals updated for {symbol} ({timeframe}).")
             else:
                 logger.warning(f"No signals generated for {symbol} ({timeframe}).")
 
         except Exception as e:
             logger.error(f"Signal update failed for {symbol} ({timeframe}): {e}")
 
+    def trigger_trade_bot_if_needed(self, symbols: List[str]):
+        """
+        Trigger trade logic for each active symbol by calling risk management
+        and signal-based trading functions on the TradeBot instance.
+        """
+        for symbol in symbols:
+            self.trade_bot.execute_signal_based_trading_for_symbol(symbol)
 
 class Scheduler:
     """Manages the scheduling of update tasks."""
-
     def __init__(self, updater):
         self.updater = updater
         self._configure_schedules()
@@ -302,60 +307,71 @@ class Scheduler:
     def _configure_schedules(self):
         """Schedule updates at exact quarter-hour marks."""
         schedule.every().hour.at(":00").do(self._run_update)
-        schedule.every().hour.at(":00").do(self._run_update)
+        schedule.every().hour.at(":15").do(self._run_update)
         schedule.every().hour.at(":30").do(self._run_update)
         schedule.every().hour.at(":45").do(self._run_update)
 
     def _run_update(self):
         """Runs an update on a separate thread to avoid blocking the scheduler."""
-        logger.info(f"Starting scheduled update at {datetime.now(timezone.utc)}")
+        logger.info(f"Starting scheduled update at {datetime.now(LOCAL_TZ)}")
         update_thread = threading.Thread(target=self.updater.run_update, daemon=True)
         update_thread.start()
 
     def _calculate_delay_to_next_quarter(self):
-        """Calculates the exact seconds until the next quarter-hour (xx:00, xx:15, xx:30, xx:45)."""
-        now = datetime.now(timezone.utc)
+        """Calculates seconds until the next quarter-hour (xx:00, xx:15, xx:30, xx:45)."""
+        now = datetime.now(LOCAL_TZ)
         minutes = now.minute
-
-        # Find the next quarter-hour mark
         next_quarter = ((minutes // 15) + 1) * 15
         if next_quarter >= 60:
             next_quarter = 0
             next_run = (now + timedelta(hours=1)).replace(minute=next_quarter, second=1, microsecond=0)
         else:
             next_run = now.replace(minute=next_quarter, second=1, microsecond=0)
-
         delay = (next_run - now).total_seconds()
-        return max(0, delay)  # Ensure non-negative delay
+        return max(0, delay)
 
     def run(self):
         """Runs the scheduler main loop after syncing to the next quarter-hour."""
         logger.info("Starting scheduler...")
-
-        # Step 1: Run the first update immediately
         self._run_update()
-
-        # Step 2: Calculate delay to the next quarter-hour
         delay = self._calculate_delay_to_next_quarter()
         logger.info(f"Sleeping for {int(delay)} seconds to sync with next quarter-hour.")
-        time.sleep(delay)  # Wait until the next quarter-hour
-
-        # Step 3: Enter main scheduling loop
+        time.sleep(delay)
         while True:
             schedule.run_pending()
-            time.sleep(1)  # Prevents excessive CPU usage
+            time.sleep(1)
+
 
 if __name__ == "__main__":
     try:
-        from app.data_handler import DataUpdater  
         updater = DataUpdater()
         scheduler = Scheduler(updater)
-        scheduler.run()
+        scheduler_thread = threading.Thread(target=scheduler.run, daemon=True)
+        scheduler_thread.start()
+
+        def risk_management_loop(trade_bot_instance):
+            while True:
+                try:
+                    symbols_df = trade_bot_instance.db_manager.fetch_tickers()
+                    if symbols_df is not None and not symbols_df.empty:
+                        symbols = symbols_df["symbol"].tolist()
+                        for sym in symbols:
+                            trade_bot_instance.execute_risk_management_for_symbol(sym)
+                    else:
+                        logger.warning("No active symbols found for risk management loop.")
+                except Exception as e:
+                    logger.error(f"Error in risk management loop: {e}", exc_info=True)
+                time.sleep(60*2)
+
+        trade_bot_instance = TradeBot()
+        risk_thread = threading.Thread(target=risk_management_loop, args=(trade_bot_instance,), daemon=True)
+        risk_thread.start()
+
+        # The DataUpdater now updates data, signals, and then triggers trade logic.
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         logger.info("Shutting down gracefully...")
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
-
-
-
