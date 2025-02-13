@@ -1,6 +1,9 @@
-# risk_parameters.py
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QLineEdit, QGridLayout, QPushButton
 from app.database import DatabaseManager
+import json
+import os
+
+ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
 
 class RiskManagementPanel:
     def __init__(self, db_manager: DatabaseManager):
@@ -13,25 +16,65 @@ class RiskManagementPanel:
         # Main vertical layout for the panel
         self.layout = QVBoxLayout()
 
+        # --- Algorithm toggle button ---
+        self.algorithm_toggle = QPushButton("Algorithm: OFF")
+        self.algorithm_toggle.setCheckable(True)
+        # Set initial style with very light red for OFF
+        self.algorithm_toggle.setStyleSheet("background-color: #ffcccc;")
+        self.algorithm_toggle.toggled.connect(self.handle_toggle_algorithm)
+        self.layout.addWidget(self.algorithm_toggle)
+
         # Create a grid layout to hold the risk parameter labels and input fields
         self.param_grid = QGridLayout()
         self.param_labels = []
         self.param_inputs = []
-
         self.layout.addLayout(self.param_grid)
+        
         # Save button to persist changes
         self.save_button = QPushButton("Save Risk Parameters")
         self.save_button.clicked.connect(self.handle_save_button)
         self.layout.addWidget(self.save_button)
 
-        # Store the current symbol to know for which ticker risk parameters are being managed
+        # Store the current symbol for which risk parameters are managed
         self.current_symbol = None
+
+    def load_algorithm_config(self):
+        """Load the algorithm configuration from file and ensure all tickers are present."""
+        config = {}
+        if os.path.exists(ALGORITHM_CONFIG_FILE):
+            with open(ALGORITHM_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        # Fetch tickers from the database and ensure each ticker is in the config.
+        tickers_df = self.db_manager.fetch_tickers()
+        if tickers_df is not None and not tickers_df.empty:
+            tickers = tickers_df["symbol"].tolist()
+            for ticker in tickers:
+                if ticker not in config:
+                    config[ticker] = False  
+        return config
+
+    def save_algorithm_config(self, config):
+        """Save the algorithm configuration to file."""
+        os.makedirs(os.path.dirname(ALGORITHM_CONFIG_FILE), exist_ok=True)
+        with open(ALGORITHM_CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
 
     def update_risk_parameters(self, symbol):
         """
-        Fetch and update parameters for the selected ticker and timeframe.
+        Fetch and update parameters for the selected ticker.
         """
         self.current_symbol = symbol  
+        # Update algorithm toggle state based on config:
+        config = self.load_algorithm_config()
+        state = config.get(symbol, False)
+        self.algorithm_toggle.setChecked(state)
+        # Update button style based on state
+        if state:
+            self.algorithm_toggle.setText("Algorithm: ON")
+            self.algorithm_toggle.setStyleSheet("background-color: #ccffcc;")
+        else:
+            self.algorithm_toggle.setText("Algorithm: OFF")
+            self.algorithm_toggle.setStyleSheet("background-color: #ffcccc;")
 
         params = self.db_manager.fetch_risk_params(symbol)
         if not params:
@@ -61,6 +104,22 @@ class RiskManagementPanel:
             self.param_labels.append(label)
             self.param_inputs.append(input_field)
 
+    def handle_toggle_algorithm(self, checked):
+        """
+        Toggle the algorithm state for the current symbol and save to the config file.
+        """
+        if checked:
+            self.algorithm_toggle.setText("Algorithm: ON")
+            self.algorithm_toggle.setStyleSheet("background-color: #ccffcc;")
+        else:
+            self.algorithm_toggle.setText("Algorithm: OFF")
+            self.algorithm_toggle.setStyleSheet("background-color: #ffcccc;")
+        # Save the new state for the current symbol if one is selected
+        if self.current_symbol:
+            config = self.load_algorithm_config()
+            config[self.current_symbol] = checked
+            self.save_algorithm_config(config)
+
     def handle_save_button(self):
         """
         Reads the input fields, converts them to numbers, and calls the database
@@ -71,9 +130,7 @@ class RiskManagementPanel:
             return
 
         try:
-            # Convert all input field values to floats
             params = [float(field.text()) for field in self.param_inputs]
-            # Save risk parameters using the database manager method save_risk_params
             self.db_manager.save_risk_params(
                 self.current_symbol,
                 stoploss=params[0],

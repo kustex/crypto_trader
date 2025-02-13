@@ -7,10 +7,9 @@ class SignalWorker(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, db_manager: DatabaseManager, plot_canvas, symbol, timeframe):
-        super().__init__()
+    def __init__(self, db_manager: DatabaseManager, symbol: str, timeframe: str, parent=None):
+        super().__init__(parent)
         self.db_manager = db_manager
-        self.plot_canvas = plot_canvas
         self.symbol = symbol
         self.timeframe = timeframe
 
@@ -18,7 +17,6 @@ class SignalWorker(QThread):
         """Run signal generation in a background thread."""
         try:
             df = self.db_manager.query_data(self.symbol, self.timeframe)
-            # print(df)
             if df is None or df.empty:
                 self.error.emit(f"No data available for {self.symbol} ({self.timeframe}).")
                 return
@@ -33,8 +31,11 @@ class SignalWorker(QThread):
                 rvi_15m_period, rvi_1h_period,
                 rvi_15m_upper_threshold, rvi_15m_lower_threshold,
                 rvi_1h_upper_threshold, rvi_1h_lower_threshold,
-                include_15m_rvi
+                include_15m_rvi_db
             ) = params
+
+            # Here, if you want to honor the db setting, you could override include_15m_rvi:
+            include_15m = bool(include_15m_rvi_db)
 
             keltner_params = {
                 "period": keltner_period,
@@ -51,32 +52,26 @@ class SignalWorker(QThread):
             signal_generator = SignalGenerator(db_manager=self.db_manager)
             signal_generator.calculate_and_store_indicators(self.symbol, self.timeframe, keltner_params, rvi_params)
 
-            final_signals = signal_generator.generate_final_signals(self.symbol, self.timeframe, include_15m_rvi=bool(include_15m_rvi))
+            final_signals = signal_generator.generate_final_signals(self.symbol, self.timeframe, include_15m_rvi=include_15m)
             if final_signals is None or final_signals.empty:
                 self.error.emit(f"Signal generation returned an empty DataFrame for {self.symbol} ({self.timeframe}).")
                 return
 
             self.db_manager.save_signals_to_db(final_signals)
 
-            self.plot_canvas.plot_data(
-                symbol=self.symbol,
-                timeframe=self.timeframe,
-                include_15m_rvi=bool(include_15m_rvi)
-            )
-
-            print(f"✅ Signals regenerated and graph updated for {self.symbol} ({self.timeframe}).")
+            # Remove UI updates from here. Instead, we simply emit finished.
+            print(f"✅ Signals regenerated for {self.symbol} ({self.timeframe}).")
             self.finished.emit()
 
         except Exception as e:
             error_msg = f"❌ Error in signal generation for {self.symbol} ({self.timeframe}): {str(e)}\n{traceback.format_exc()}"
             self.error.emit(error_msg)
 
-
 class SignalController:
     def __init__(self, db_manager: DatabaseManager, plot_canvas):
         self.db_manager = db_manager
         self.plot_canvas = plot_canvas
-        self.workers = {}  # ✅ Use dictionary to track multiple workers (per symbol and timeframe)
+        self.workers = {}  # track workers per (symbol, timeframe)
 
     def regenerate_signals_and_refresh(self, symbol, timeframe):
         """Regenerate signals asynchronously while allowing multiple tickers and timeframes."""
@@ -84,26 +79,29 @@ class SignalController:
             print("No ticker selected, cannot regenerate signals.")
             return
 
-        # ✅ Fix: Track workers by (symbol, timeframe) instead of just symbol
+        # Avoid starting a new worker if one is already running for the same (symbol, timeframe)
         if (symbol, timeframe) in self.workers and self.workers[(symbol, timeframe)].isRunning():
             print(f"⚠️ Signal generation is already running for {symbol} ({timeframe}).")
             return  
 
-        worker = SignalWorker(self.db_manager, self.plot_canvas, symbol, timeframe)
+        # Create the worker with the include_15m_rvi flag (here, for example, set to True)
+        worker = SignalWorker(self.db_manager, symbol, timeframe)
         worker.finished.connect(lambda: self.on_signal_generation_complete(symbol, timeframe))
         worker.error.connect(lambda msg: self.on_signal_generation_error(symbol, timeframe, msg))
 
-        self.workers[(symbol, timeframe)] = worker  # ✅ Store worker per (symbol, timeframe)
+        self.workers[(symbol, timeframe)] = worker
         worker.start()
 
     def on_signal_generation_complete(self, symbol, timeframe):
-        """Callback when signal generation is complete."""
+        """Callback when signal generation is complete. Update the UI on the main thread."""
         print(f"✅ Signal generation finished successfully for {symbol} ({timeframe}).")
-        del self.workers[(symbol, timeframe)]  # ✅ Remove worker correctly
+        # Now that the signals have been updated in the database, update the graph in the main thread.
+        self.plot_canvas.plot_data(symbol, timeframe)
+        if (symbol, timeframe) in self.workers:
+            del self.workers[(symbol, timeframe)]
 
     def on_signal_generation_error(self, symbol, timeframe, message):
         """Callback when an error occurs in the worker thread."""
         print(f"❌ Signal generation error for {symbol} ({timeframe}): {message}")
-        del self.workers[(symbol, timeframe)]  # ✅ Remove worker correctly
-
-
+        if (symbol, timeframe) in self.workers:
+            del self.workers[(symbol, timeframe)]

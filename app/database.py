@@ -621,11 +621,16 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error accessing database content: {e}")
 
-    def query_main_timeframe_data(self, symbol, timeframe):
+    def query_main_timeframe_data(self, symbol, timeframe, start_date=None):
         """
-        Query the main timeframe data (e.g., 1h) and its indicators.
+        Query the main timeframe data and its indicators, with an optional start_date for lookback filtering.
+
+        :param symbol: The trading pair symbol.
+        :param timeframe: The timeframe (e.g., "1h", "15m").
+        :param start_date: The earliest timestamp to include in the query (ISO format).
+        :return: Pandas DataFrame containing the queried data.
         """
-        query = f"""
+        query = """
             SELECT h.timestamp, h.open, h.high, h.low, h.close, h.volume,
                 i.keltner_upper, i.keltner_lower, i.rvi,
                 s.keltner_signal, s.rvi_signal, s.final_signal
@@ -634,21 +639,39 @@ class DatabaseManager:
             ON h.timestamp = i.timestamp AND h.symbol = i.symbol AND h.timeframe = i.timeframe
             LEFT JOIN signals_data s
             ON h.timestamp = s.timestamp AND h.symbol = s.symbol AND h.timeframe = s.timeframe
-            WHERE h.symbol = '{symbol}' AND h.timeframe = '{timeframe}'
-            ORDER BY h.timestamp ASC
+            WHERE h.symbol = %(symbol)s AND h.timeframe = %(timeframe)s
         """
-        with self.engine.connect() as connection:
-            return pd.read_sql(query, connection)
+        params = {"symbol": symbol, "timeframe": timeframe}
 
-    def query_15m_rvi_data(self, symbol):
+        if start_date:
+            query += " AND h.timestamp >= %(start_date)s"
+            params["start_date"] = start_date
+
+        query += " ORDER BY h.timestamp ASC"
+
+        with self.engine.connect() as connection:
+            return pd.read_sql(query, connection, params=params)
+
+    def query_15m_rvi_data(self, symbol, start_date=None):
         """
-        Query the 15m RVI data.
+        Query the 15m RVI data for a given symbol with an optional start_date filter.
+        
+        :param symbol: The trading pair symbol.
+        :param start_date: The earliest timestamp to include in the query (ISO format).
+        :return: Pandas DataFrame containing the queried RVI data.
         """
-        query = f"""
+        query = """
             SELECT timestamp, rvi 
             FROM indicator_historical_data
-            WHERE symbol = '{symbol}' AND timeframe = '15m'
-            ORDER BY timestamp ASC
+            WHERE symbol = %(symbol)s AND timeframe = '15m'
         """
+        params = {"symbol": symbol}
+
+        if start_date:
+            query += " AND timestamp >= %(start_date)s"
+            params["start_date"] = start_date
+
+        query += " ORDER BY timestamp ASC"
+
         with self.engine.connect() as connection:
-            return pd.read_sql(query, connection)
+            return pd.read_sql(query, connection, params=params)

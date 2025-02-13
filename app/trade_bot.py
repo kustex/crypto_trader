@@ -1,6 +1,6 @@
 #!/usr/bin/env python
+import json
 import os
-import time
 import logging
 import yfinance as yf
 from sqlalchemy import text
@@ -18,6 +18,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TradeBot")
 
+ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
+
+def load_algorithm_config():
+    if os.path.exists(ALGORITHM_CONFIG_FILE):
+        with open(ALGORITHM_CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
 class TradeBot:
     """
@@ -187,7 +194,14 @@ class TradeBot:
         For the given symbol, check if a new 15m signal is available.
         If so, execute a BUY order (if final_signal == 1) or a partial SELL (if final_signal == -1)
         based on risk parameters.
+        Only trade if the algorithm is enabled for this symbol in the config.
         """
+        # Check algorithm state for this symbol:
+        config = load_algorithm_config()
+        if not config.get(symbol, False):
+            logger.info(f"Algorithm disabled for {symbol}. Skipping signal-based trading.")
+            return
+
         signal = self.fetch_latest_signal(symbol, timeframe="15m")
         if signal is None:
             logger.info(f"Signal-based trading for {symbol}: No signal found.")
@@ -195,7 +209,6 @@ class TradeBot:
 
         signal_timestamp = signal["timestamp"]
         if symbol in self.last_executed_signal_timestamp and signal_timestamp <= self.last_executed_signal_timestamp[symbol]:
-            # Signal not new; do nothing.
             return
 
         final_signal = signal["final_signal"]
@@ -210,7 +223,6 @@ class TradeBot:
         if not risk_params:
             logger.warning(f"Signal-based trading: No risk parameters for {symbol}.")
             return
-        # risk_params: (stoploss, position_size_pct, max_allocation_pct, partial_sell_fraction)
         _ , position_size_pct, max_allocation_pct, partial_sell_fraction = risk_params
 
         desired_order_amount = total_capital * position_size_pct
@@ -238,15 +250,14 @@ class TradeBot:
                 logger.info(f"Signal-based trading for {symbol}: Position is at or above max allocation ({current_allocation} USDT).")
         elif final_signal == -1:  # SELL signal
             if position:
-                # Sell a fraction of the current units.
                 sell_units = position["units"] * partial_sell_fraction
                 logger.info(f"Signal-based trading for {symbol}: Placing SELL order for {sell_units} units (partial sell).")
                 self.execute_sell_order(symbol, sell_units)
             else:
                 logger.info(f"Signal-based trading for {symbol}: No open position to SELL on signal.")
 
-        # Record the timestamp of the signal we just acted on.
         self.last_executed_signal_timestamp[symbol] = signal_timestamp
+
 
     def execute_buy_order(self, symbol, order_value_usdt):
         """

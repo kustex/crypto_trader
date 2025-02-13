@@ -35,17 +35,24 @@ def adjust_for_candle_close(ts, timeframe):
 class PlotCanvas(FigureCanvas):
     def __init__(self, db_manager, parent=None, width=10, height=10, dpi=100):
         self.db_manager = db_manager
-        # Create three subplots (main timeframe, RVI, 15m RVI)
         self.fig, self.axs = plt.subplots(3, 1, figsize=(width, height), dpi=dpi)
         super().__init__(self.fig)
         self.setParent(parent)
 
-    def plot_data(self, symbol, timeframe, include_15m_rvi):
+    def plot_data(self, symbol, timeframe, lookback_days=30):
         """
-        Query data and plot it based on the symbol, timeframe, and whether to include 15m RVI.
+        Query data for the selected lookback period and plot it.
+
+        :param symbol: The trading pair symbol.
+        :param timeframe: The timeframe (e.g., "1h", "15m").
+        :param lookback_days: Number of days to look back.
         """
-        # Query the main timeframe data (assumed stored in UTC)
-        main_df = self.db_manager.query_main_timeframe_data(symbol, timeframe)
+        # Determine lookback start date
+        max_date = pd.Timestamp.now(tz=LOCAL_TZ)
+        min_date = max_date - pd.Timedelta(days=lookback_days)
+
+        # Query only the required data from the database
+        main_df = self.db_manager.query_main_timeframe_data(symbol, timeframe, min_date.strftime("%Y-%m-%d %H:%M:%S"))
         if main_df.empty:
             for ax in self.axs:
                 ax.clear()
@@ -53,30 +60,23 @@ class PlotCanvas(FigureCanvas):
             self.draw()
             return
 
-        # Convert the stored UTC timestamps to local time (UTC+1)
+        # Convert timestamps to local timezone
         main_df["timestamp"] = pd.to_datetime(main_df["timestamp"]).dt.tz_localize('UTC').dt.tz_convert(LOCAL_TZ)
-        # Create a display column that shows the candle closing time
         main_df["display_timestamp"] = main_df["timestamp"].apply(lambda ts: adjust_for_candle_close(ts, timeframe))
-
-        # Filter data for plotting range
-        max_date = main_df["display_timestamp"].max()
-        lookback_period = pd.Timedelta(days=30) if timeframe == "1h" else pd.Timedelta(days=180)
-        min_date = max_date - lookback_period
-        main_df = main_df[main_df["display_timestamp"] >= min_date]
 
         self._plot_main_timeframe(main_df, symbol, timeframe)
         self._plot_rvi(main_df, timeframe)
 
-        # Query 15m RVI data if needed
-        df_15m = self.db_manager.query_15m_rvi_data(symbol)
+        # Query and filter 15m RVI data
+        df_15m = self.db_manager.query_15m_rvi_data(symbol, min_date.strftime("%Y-%m-%d %H:%M:%S"))
         if not df_15m.empty:
             df_15m["timestamp"] = pd.to_datetime(df_15m["timestamp"]).dt.tz_localize('UTC').dt.tz_convert(LOCAL_TZ)
             df_15m["display_timestamp"] = df_15m["timestamp"].apply(lambda ts: adjust_for_candle_close(ts, "15m"))
-            df_15m = df_15m[df_15m["display_timestamp"] >= df_15m["display_timestamp"].max() - lookback_period]
         self._plot_15m_rvi(df_15m)
-        
+
         self.fig.tight_layout()
         self.draw()
+
 
     def _plot_main_timeframe(self, df, symbol, timeframe):
         self.axs[0].clear()

@@ -1,4 +1,5 @@
 import re
+import pandas as pd
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QMessageBox, QLineEdit, QAbstractItemView
 from app.ui.plot_canvas import PlotCanvas
 from app.database import DatabaseManager
@@ -157,12 +158,9 @@ class TickersPanel:
             print(f"No parameters found for {self.current_symbol} ({self.current_timeframe}).")
             return
 
-        include_15m_rvi = bool(params[5])
-
         self.plot_canvas.plot_data(
             symbol=self.current_symbol,
-            timeframe=self.current_timeframe,
-            include_15m_rvi=include_15m_rvi
+            timeframe=self.current_timeframe
         )
 
 
