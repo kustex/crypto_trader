@@ -64,7 +64,7 @@ class SignalUpdater(QThread):
                 except Exception as e:
                     print(f"❌ Error updating signals for {symbol} ({timeframe}): {e}")
                 finally:
-                    self.active_updates.remove((symbol, timeframe))  # ✅ Ensure removal even on error
+                    self.active_updates.remove((symbol, timeframe))  
 
         print("✅ Signal updates completed.")
         self.finished.emit()

@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    container_name: crypto_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: crypto_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "listen_addresses=*"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: crypto_backend
+    restart: always
+    depends_on:
+      - db
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: crypto_data
+      POSTGRES_USER: postgres
+
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+    container_name: crypto_gui
+    restart: always
+    depends_on:
+      - db
+    environment:
+      DISPLAY: $DISPLAY 
+
+volumes:
+  postgres_data:

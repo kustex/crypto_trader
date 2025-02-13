@@ -1,0 +1,10 @@
+ccxt==4.4.47
+matplotlib==3.10.0
+pandas==2.2.3
+psycopg2_binary==2.9.10
+PyQt6==6.8.1
+PyQt6_sip==13.9.1
+schedule==1.2.2
+SQLAlchemy==2.0.37
+tenacity==9.0.0
+yfinance==0.2.52
