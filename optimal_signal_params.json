@@ -1,0 +1,14 @@
+{
+    "BTC/USDT": {
+        "keltner_upper_multiplier": 1.2744144509578352,
+        "keltner_lower_multiplier": 1.1668134969004011,
+        "keltner_period": 12,
+        "rvi_15m_period": 5,
+        "rvi_1h_period": 12,
+        "rvi_15m_upper_threshold": 0.37982003522431873,
+        "rvi_15m_lower_threshold": -0.4168443301799666,
+        "rvi_1h_upper_threshold": 0.22206800915202335,
+        "rvi_1h_lower_threshold": -0.4047282051495352,
+        "include_15m_rvi": 0
+    }
+}

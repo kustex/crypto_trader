@@ -4,6 +4,7 @@ import json
 import os
 
 ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
+RISK_PARAMS_FILE = "optimal_risk_params.json"  # ✅ Load best risk parameters from here
 
 class RiskManagementPanel:
     def __init__(self, db_manager: DatabaseManager):
@@ -29,14 +30,53 @@ class RiskManagementPanel:
         self.param_labels = []
         self.param_inputs = []
         self.layout.addLayout(self.param_grid)
-        
-        # Save button to persist changes
+
+        # ✅ "Save Risk Parameters" Button
         self.save_button = QPushButton("Save Risk Parameters")
         self.save_button.clicked.connect(self.handle_save_button)
         self.layout.addWidget(self.save_button)
 
+        # ✅ "Load Optimal Risk Parameters" Button
+        self.load_params_button = QPushButton("Load Optimal Risk Parameters")
+        self.load_params_button.clicked.connect(self.load_optimal_parameters)  # ✅ Load best risk parameters
+        self.layout.addWidget(self.load_params_button)
+
+        # ✅ Status Label
+        self.status_label = QLabel("Status: Ready")
+        self.layout.addWidget(self.status_label)
+
         # Store the current symbol for which risk parameters are managed
         self.current_symbol = None
+
+    def load_optimal_parameters(self):
+        """
+        Load **optimal** risk parameters from the backtester and update the UI.
+        """
+        if not os.path.exists(RISK_PARAMS_FILE):
+            self.status_label.setText("⚠️ No saved optimal risk parameters found!")
+            return
+
+        try:
+            with open(RISK_PARAMS_FILE, "r") as f:
+                params = json.load(f)
+
+            # ✅ Ensure only risk parameters are loaded (4 values)
+            risk_param_keys = [
+                "stoploss", "position_size", "max_allocation", "partial_sell_fraction"
+            ]
+
+            param_values = [params[key] for key in risk_param_keys if key in params]  # ✅ Extract only risk parameters
+
+            # ✅ Update only risk parameter inputs
+            for row, value in enumerate(param_values):
+                self.param_inputs[row].setText(str(value))
+
+            self.status_label.setText("✅ Optimal Risk Parameters Loaded Successfully!")
+
+        except KeyError as e:
+            self.status_label.setText(f"❌ Missing parameter: {str(e)}")
+        except Exception as e:
+            self.status_label.setText(f"❌ Error loading risk parameters: {str(e)}")
 
     def load_algorithm_config(self):
         """Load the algorithm configuration from file and ensure all tickers are present."""
@@ -64,21 +104,10 @@ class RiskManagementPanel:
         Fetch and update parameters for the selected ticker.
         """
         self.current_symbol = symbol  
-        # Update algorithm toggle state based on config:
-        config = self.load_algorithm_config()
-        state = config.get(symbol, False)
-        self.algorithm_toggle.setChecked(state)
-        # Update button style based on state
-        if state:
-            self.algorithm_toggle.setText("Algorithm: ON")
-            self.algorithm_toggle.setStyleSheet("background-color: #ccffcc;")
-        else:
-            self.algorithm_toggle.setText("Algorithm: OFF")
-            self.algorithm_toggle.setStyleSheet("background-color: #ffcccc;")
 
         params = self.db_manager.fetch_risk_params(symbol)
         if not params:
-            print(f"No parameters found for {symbol}.")
+            self.status_label.setText(f"⚠️ No parameters found for {symbol}.")
             return
 
         param_names = [
@@ -88,14 +117,14 @@ class RiskManagementPanel:
             "Partial Sell Fraction"  
         ]
 
-        # Clear previous parameter inputs
+        # ✅ Clear previous parameter inputs
         for widget in self.param_labels + self.param_inputs:
             self.param_grid.removeWidget(widget)
             widget.deleteLater()
         self.param_labels.clear()
         self.param_inputs.clear()
 
-        # Populate with new parameters
+        # ✅ Populate with new parameters
         for i, (name, value) in enumerate(zip(param_names, params)):
             label = QLabel(name)
             input_field = QLineEdit(str(value))
@@ -126,11 +155,13 @@ class RiskManagementPanel:
         method to save the updated risk parameters.
         """
         if not self.current_symbol:
-            print("No symbol selected for risk parameters!")
+            self.status_label.setText("⚠️ No symbol selected for saving risk parameters!")
             return
 
         try:
             params = [float(field.text()) for field in self.param_inputs]
+
+            # ✅ Save risk parameters to the database
             self.db_manager.save_risk_params(
                 self.current_symbol,
                 stoploss=params[0],
@@ -138,6 +169,8 @@ class RiskManagementPanel:
                 max_allocation=params[2],
                 partial_sell_fraction=params[3]
             )
-            print(f"Risk parameters saved for {self.current_symbol}.")
+
+            self.status_label.setText(f"✅ Risk Parameters saved for {self.current_symbol}!")
+
         except ValueError:
-            print("Invalid input in risk parameters. Please enter valid numerical values.")
+            self.status_label.setText("❌ Invalid input! Enter valid numbers.")

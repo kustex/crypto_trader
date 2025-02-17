@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from datetime import datetime
 from PyQt6.QtWidgets import (
-    QMainWindow, QVBoxLayout, QWidget, QGridLayout, QLabel, QPushButton
+    QMainWindow, QVBoxLayout, QWidget, QGridLayout, QLabel, QPushButton, QTabWidget, QLineEdit
 )
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QGroupBox, QWidget
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QDateTime
@@ -15,12 +15,12 @@ from app.ui.risk_parameters import RiskManagementPanel
 from app.database import DatabaseManager
 from app.executor import TradeExecutor
 from app.controllers.signal_controller import SignalController
+from app.ui.api_credentials import load_api_credentials, save_api_credentials
+from app.ui.backtest_panel import BacktestPanel
 from datetime import timezone, timedelta
 
-# Load Bitget API credentials
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+# Load API Credentials
+API_KEY, API_SECRET, API_PASSPHRASE = load_api_credentials()
 
 LOCAL_TZ = timezone(timedelta(hours=1))
 
@@ -75,7 +75,7 @@ class TickerApp(QMainWindow):
         self.setWindowTitle("Ticker Viewer")
         self.resize(1400, 1000)
 
-        # Initialize components (as before)
+        # Initialize database & trading components
         self.db_manager = DatabaseManager()
         self.trade_executor = TradeExecutor(API_KEY, API_SECRET, API_PASSPHRASE)
         self.plot_canvas = PlotCanvas(self.db_manager)
@@ -85,12 +85,35 @@ class TickerApp(QMainWindow):
         self.orders_panel = OrdersPanel(self.db_manager, self.trade_executor, self)
         self.portfolio_panel = PortfolioPanel(self.trade_executor, self.db_manager)
         self.tickers_panel = TickersPanel(self.db_manager, self.plot_canvas, self.signal_management, self.orders_panel, self.risk_management, self.trade_executor)
+        self.backtest_widget = BacktestPanel(self.db_manager)
 
-        # # Create a notifier for UI updates.
-        # self.notifier = notifier_instance
-        # self.notifier.ui_update.connect(self.update_ui)
+        # Create tab interface
+        self.tabs = QTabWidget(self)
+        self.main_widget = QWidget()
+        self.settings_widget = QWidget()
 
-        # Create group boxes for a clear visual grouping
+        # Set up UI components
+        self.setup_main_ui()
+        self.setup_settings_ui()
+
+        # Add tabs
+        self.tabs.addTab(self.main_widget, "Dashboard")
+        self.tabs.addTab(self.settings_widget, "Settings")
+        self.tabs.addTab(self.backtest_widget, "Backtester")
+
+        # Set central widget with tabs
+        self.setCentralWidget(self.tabs)
+
+        # UI Timer for auto-updates
+        self.ui_timer = QTimer(self)
+        self.ui_timer.timeout.connect(self.update_ui)
+        self.ui_timer.start(60 * 1000)
+
+        # Load initial tickers
+        self.initialize_tickers()
+
+    def setup_main_ui(self):
+        """Set up the main dashboard UI."""
         tickers_group = QGroupBox("Tickers")
         tickers_group.setLayout(self.tickers_panel.layout)
 
@@ -106,47 +129,76 @@ class TickerApp(QMainWindow):
         portfolio_group = QGroupBox("Portfolio")
         portfolio_group.setLayout(self.portfolio_panel.layout)
 
-        # Create left sidebar (for tickers, signals, and risk)
+        # Left Sidebar
         left_layout = QVBoxLayout()
         left_layout.addWidget(tickers_group)
         left_layout.addWidget(signal_group)
         left_layout.addWidget(risk_group)
-        left_layout.addStretch()  # Push content to the top
+        left_layout.addStretch()
 
-        # Create right sidebar (for orders and portfolio)
+        # Right Sidebar
         right_layout = QVBoxLayout()
         right_layout.addWidget(orders_group)
         right_layout.addWidget(portfolio_group)
         right_layout.addStretch()
 
-        # Create central area for the plot canvas
+        # Center (Graph)
         center_layout = QVBoxLayout()
         center_layout.addWidget(self.plot_canvas)
-        # Assemble the main layout using an HBox to separate the three regions
+
+        # Combine all layouts
         main_hlayout = QHBoxLayout()
         main_hlayout.addLayout(left_layout, stretch=1)
         main_hlayout.addLayout(center_layout, stretch=2)
         main_hlayout.addLayout(right_layout, stretch=1)
 
-        # Create a main vertical layout to add a status bar at the bottom
+        # Main Layout
         main_vlayout = QVBoxLayout()
         main_vlayout.addLayout(main_hlayout)
         self.status_label = QLabel("System Status: Idle | Last Updated: Not Yet Updated")
         self.status_label.setStyleSheet("font-weight: bold; color: green;")
         main_vlayout.addWidget(self.status_label)
 
-        # Set central widget with the main vertical layout
-        central_widget = QWidget(self)
-        central_widget.setLayout(main_vlayout)
-        self.setCentralWidget(central_widget)
+        self.main_widget.setLayout(main_vlayout)
 
-        # Set up a QTimer to update the UI every minute.
-        self.ui_timer = QTimer(self)
-        self.ui_timer.timeout.connect(self.update_ui)
-        self.ui_timer.start(60 * 1000)  
+    def setup_settings_ui(self):
+        """Set up the settings tab for API credentials."""
+        layout = QVBoxLayout()
 
-        # Load initial tickers
-        self.initialize_tickers()
+        # Input Fields
+        self.api_key_input = QLineEdit()
+        self.api_secret_input = QLineEdit()
+        self.api_passphrase_input = QLineEdit()
+
+        self.api_key_input.setPlaceholderText("Enter Bitget API Key")
+        self.api_secret_input.setPlaceholderText("Enter Bitget API Secret")
+        self.api_passphrase_input.setPlaceholderText("Enter Bitget API Passphrase")
+
+        # Pre-fill with existing credentials
+        self.api_key_input.setText(API_KEY)
+        self.api_secret_input.setText(API_SECRET)
+        self.api_passphrase_input.setText(API_PASSPHRASE)
+
+        # Save button
+        self.save_button = QPushButton("Save API Credentials")
+        self.save_button.clicked.connect(self.save_api_credentials)
+
+        # Grid layout
+        grid = QGridLayout()
+        grid.addWidget(QLabel("API Key:"), 0, 0)
+        grid.addWidget(self.api_key_input, 0, 1)
+        grid.addWidget(QLabel("API Secret:"), 1, 0)
+        grid.addWidget(self.api_secret_input, 1, 1)
+        grid.addWidget(QLabel("API Passphrase:"), 2, 0)
+        grid.addWidget(self.api_passphrase_input, 2, 1)
+        grid.addWidget(self.save_button, 3, 0, 1, 2)
+
+        layout.addLayout(grid)
+        self.settings_widget.setLayout(layout)
+
+    def save_api_credentials(self):
+        """Save API credentials."""
+        save_api_credentials(self.api_key_input.text(), self.api_secret_input.text(), self.api_passphrase_input.text())
 
     def update_ui(self):
         """

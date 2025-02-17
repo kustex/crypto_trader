@@ -24,7 +24,7 @@ class OrdersPanel:
         # Order Type Selection
         self.order_type_combo = QComboBox()
         self.order_type_combo.addItems(["Market", "Limit"])
-        self.layout.addWidget(QLabel("Order Type:"))
+        self.layout.addWidget(QLabel(f"Order Type: {self.selected_ticker}"))
         self.layout.addWidget(self.order_type_combo)
 
         # Limit Price Input (Hidden by Default)
