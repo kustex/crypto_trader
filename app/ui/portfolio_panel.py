@@ -85,23 +85,38 @@ class PortfolioPanel(QWidget):
     def update_open_positions(self):
         """
         Update the open positions table using the portfolio data stored in the TradeExecutor.
-        Assumes each portfolio entry is stored as:
-          { "total_invested": <total USDT>, "units": <number of asset units held> }
+        With FIFO data, each portfolio entry is a list of trades:
+        [ { "entry_price": float, "units": float }, ... ]
+        We sum them up to get total units and total invested.
         """
         portfolio = self.trade_executor.portfolio
         open_positions = []
-        for symbol, data in portfolio.items():
+        
+        for symbol, trades_list in portfolio.items():
+            # Skip "USDT/EUR" or any other synthetic entry if needed
             if symbol == "USDT/EUR":
-                continue  # Skip conversion entry if not needed.
-            total_invested = data.get("total_invested", 0)
-            units = data.get("units", 0)
-            if units <= 0:
                 continue
-            avg_buy_price = total_invested / units if units > 0 else 0
+            
+            # Sum up the total invested and total units for this symbol
+            total_invested = 0.0
+            total_units = 0.0
+            for trade in trades_list:
+                total_invested += trade["entry_price"] * trade["units"]
+                total_units += trade["units"]
+
+            # If no units are held, skip
+            if total_units <= 0:
+                continue
+
+            # Average buy price (cost basis)
+            avg_buy_price = total_invested / total_units if total_units > 0 else 0
+
+            # Fetch current price from the executor
             current_price = self.trade_executor.get_current_price(symbol)
             if current_price is None:
                 current_price = avg_buy_price  # fallback
-            current_value = units * current_price
+
+            current_value = total_units * current_price
             pnl_usdt = current_value - total_invested
             pnl_percent = (pnl_usdt / total_invested * 100) if total_invested > 0 else 0
 
@@ -115,6 +130,7 @@ class PortfolioPanel(QWidget):
                 "pnl_percent": round(pnl_percent, 2)
             })
 
+        # Now populate the QTableWidget rows
         self.open_positions_table.setRowCount(len(open_positions))
         for row, pos in enumerate(open_positions):
             self.open_positions_table.setItem(row, 0, QTableWidgetItem(pos["symbol"]))
@@ -124,8 +140,9 @@ class PortfolioPanel(QWidget):
             self.open_positions_table.setItem(row, 4, QTableWidgetItem(str(pos["pnl_usdt"])))
             self.open_positions_table.setItem(row, 5, QTableWidgetItem(str(pos["current_price"])))
             self.open_positions_table.setItem(row, 6, QTableWidgetItem(str(pos["avg_buy_price"])))
-        # Allow manual adjustment of columns
+
         self.open_positions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+
 
     def update_closed_orders(self):
         """Fetch and update closed orders sorted by time."""

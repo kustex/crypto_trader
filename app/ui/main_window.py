@@ -19,9 +19,7 @@ from app.ui.api_credentials import load_api_credentials, save_api_credentials
 from app.ui.backtest_panel import BacktestPanel
 from datetime import timezone, timedelta
 
-# Load API Credentials
 API_KEY, API_SECRET, API_PASSPHRASE = load_api_credentials()
-
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 
@@ -98,8 +96,8 @@ class TickerApp(QMainWindow):
 
         # Add tabs
         self.tabs.addTab(self.main_widget, "Dashboard")
-        self.tabs.addTab(self.settings_widget, "Settings")
         self.tabs.addTab(self.backtest_widget, "Backtester")
+        self.tabs.addTab(self.settings_widget, "Settings")
 
         # Set central widget with tabs
         self.setCentralWidget(self.tabs)

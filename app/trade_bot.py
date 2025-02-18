@@ -8,6 +8,7 @@ import pandas as pd
 
 from app.database import DatabaseManager
 from app.executor import TradeExecutor
+from app.ui.api_credentials import load_api_credentials 
 
 # Configure logging for the trade bot.
 logging.basicConfig(
@@ -19,6 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("TradeBot")
 
 ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
+API_KEY, API_SECRET, API_PASSPHRASE = load_api_credentials()
 
 def load_algorithm_config():
     if os.path.exists(ALGORITHM_CONFIG_FILE):
@@ -30,27 +32,26 @@ class TradeBot:
     """
     Executes trades based on risk parameters and generated signals.
 
-    Portfolio state is stored in JSON as:
-      { "SYMBOL": { "total_invested": <USDT>, "units": <number of units> }, ... }
-
-    Core logic:
-      - Risk management: For each open position, if the current price falls below 
-        (avg_buy_price × (1 - stoploss)), trigger a full sell (selling all held units).
-      - Signal-based trading: When a new 15m signal is available (tracked per symbol),
-        if final_signal == 1 (BUY) then attempt to add to the position (subject to free USDT and max allocation),
-        and if final_signal == -1 (SELL) then sell a fraction of the current units.
+    ----
+    FIFO Implementation:
+      The portfolio is stored as:
+        self.trade_executor.portfolio[symbol] = [
+            { "entry_price": <float>, "units": <float> },
+            { "entry_price": <float>, "units": <float> },
+            ...
+        ]
+      Each BUY creates a new "trade layer". SELL orders remove units FIFO.
+      Stoploss is checked individually per trade, so only those below threshold are closed.
     """
+
     def __init__(self):
         self.db_manager = DatabaseManager()
-        self.trade_executor = TradeExecutor(
-            os.getenv("BITGET_API_KEY"),
-            os.getenv("BITGET_API_SECRET"),
-            os.getenv("BITGET_API_PASSPHRASE")
-        )
+        self.trade_executor = TradeExecutor(API_KEY, API_SECRET, API_PASSPHRASE)
+
         # For signal-based trading, track the timestamp of the last executed signal per symbol.
         self.last_executed_signal_timestamp = {}
         # The signal-based cycle is assumed to work on 15-minute signals.
-        self.signal_cycle_interval = 15 * 60  # seconds
+        self.signal_cycle_interval = 60 * 60  # seconds
 
     def get_total_capital(self):
         """
@@ -100,20 +101,32 @@ class TradeBot:
 
     def get_open_position(self, symbol):
         """
-        Return the open position for the given symbol.
-        The portfolio is stored as { symbol: { "total_invested": ..., "units": ... } }.
-        The average buy price is computed as total_invested / units.
+        Aggregates all trade layers for this symbol, returning a dict:
+          { "symbol": str, "total_invested": float, "units": float, "avg_price": float }
+        If no trades are open, returns None.
         """
-        portfolio = self.trade_executor.portfolio
-        if symbol in portfolio:
-            pos = portfolio[symbol]
-            units = pos.get("units", 0)
-            total_invested = pos.get("total_invested", 0)
-            avg_buy_price = total_invested / units if units > 0 else 0
-            return {"symbol": symbol, "total_invested": total_invested, "units": units, "avg_price": avg_buy_price}
-        return None
+        trades_list = self.trade_executor.portfolio.get(symbol, [])
+        if not trades_list:
+            return None
 
-    def fetch_latest_signal(self, symbol, timeframe="15m"):
+        total_invested = 0.0
+        total_units = 0.0
+        for trade in trades_list:
+            total_invested += trade["entry_price"] * trade["units"]
+            total_units += trade["units"]
+
+        if total_units <= 0:
+            return None
+
+        avg_buy_price = total_invested / total_units
+        return {
+            "symbol": symbol,
+            "total_invested": total_invested,
+            "units": total_units,
+            "avg_price": avg_buy_price
+        }
+
+    def fetch_latest_signal(self, symbol, timeframe="1h"):
         """
         Fetch the latest signal for a given symbol and timeframe from the signals_data table.
         Returns a dictionary with keys: timestamp, symbol, timeframe, keltner_signal,
@@ -151,58 +164,55 @@ class TradeBot:
 
     def execute_risk_management_for_symbol(self, symbol):
         """
-        For the given symbol, check if the current open position's stoploss condition is met.
-        Compute the average buy price as total_invested / units.
-        If current price < avg_buy_price × (1 - stoploss), execute a full sell.
+        Check if any trade layer has price < entry_price * (1 - stoploss).
+        If so, that entire layer is closed (FIFO concept is simply that each layer is handled individually).
         """
         current_price = self.trade_executor.get_current_price(symbol)
         if current_price is None:
             logger.warning(f"Risk management: Could not fetch current price for {symbol}.")
             return
 
-        position = self.get_open_position(symbol)
-        if not position:
+        trades_list = self.trade_executor.portfolio.get(symbol, [])
+        if not trades_list:
             return
 
-        total_invested = position['total_invested']
-        avg_buy_price = position["avg_price"]
         risk_params = self.db_manager.fetch_risk_params(symbol)
         if not risk_params:
             logger.warning(f"Risk management: No risk parameters for {symbol}.")
             return
 
-        stoploss = risk_params[0]  # e.g., 0.10 means 10% drop allowed
-        stoploss_threshold = avg_buy_price * (1 - stoploss)
-        logger.info(f"Risk management for {symbol}: total invested={total_invested} avg_buy_price={avg_buy_price}, threshold={stoploss_threshold:.2f}, current_price={current_price:.2f}")
+        stoploss = risk_params[0]  # e.g., 0.10 means 10% drop
 
-        if current_price < stoploss_threshold:
-            # Before placing the sell order, check the actual available balance for the asset.
-            base_asset = symbol.split("/")[0]
-            available_balance = self.get_available_asset_balance(symbol)
-            # Our internal position holds a certain number of units.
-            internal_units = position["units"]
-            # We take the minimum of our internal units and the available balance.
-            units_to_sell = min(internal_units, available_balance)
-            if units_to_sell <= 0:
-                logger.warning(f"Risk management: Available balance for {symbol} is insufficient ({available_balance} units).")
-                return
-            logger.info(f"Risk management: Stoploss triggered for {symbol}. Selling {units_to_sell:.4f} units (internal: {internal_units:.4f} units, available: {available_balance:.4f} units).")
-            self.execute_sell_order(symbol, units_to_sell)
+        # Evaluate each trade for stoploss
+        indexes_to_sell = []
+        for i, trade in enumerate(trades_list):
+            stoploss_threshold = trade["entry_price"] * (1 - stoploss)
+            if current_price < stoploss_threshold:
+                indexes_to_sell.append(i)
+
+        # Sell each trade that breaks the stoploss threshold
+        # in descending order (to not break indexing)
+        for i in sorted(indexes_to_sell, reverse=True):
+            units_to_sell = trades_list[i]["units"]
+            if units_to_sell > 0:
+                logger.info(
+                    f"Risk management for {symbol}: Trade layer at entry={trades_list[i]['entry_price']:.4f} "
+                    f"triggered stoploss. Selling {units_to_sell:.4f} units."
+                )
+                self.execute_sell_order(symbol, units_to_sell)
 
     def execute_signal_based_trading_for_symbol(self, symbol):
         """
         For the given symbol, check if a new 15m signal is available.
-        If so, execute a BUY order (if final_signal == 1) or a partial SELL (if final_signal == -1)
-        based on risk parameters.
+        If so, handle BUY or SELL based on final_signal.
         Only trade if the algorithm is enabled for this symbol in the config.
         """
-        # Check algorithm state for this symbol:
         config = load_algorithm_config()
         if not config.get(symbol, False):
             logger.info(f"Algorithm disabled for {symbol}. Skipping signal-based trading.")
             return
 
-        signal = self.fetch_latest_signal(symbol, timeframe="15m")
+        signal = self.fetch_latest_signal(symbol, timeframe="1h")
         if signal is None:
             logger.info(f"Signal-based trading for {symbol}: No signal found.")
             return
@@ -223,47 +233,67 @@ class TradeBot:
         if not risk_params:
             logger.warning(f"Signal-based trading: No risk parameters for {symbol}.")
             return
-        _ , position_size_pct, max_allocation_pct, partial_sell_fraction = risk_params
-
-        desired_order_amount = total_capital * position_size_pct
-        max_allocation_amount = total_capital * max_allocation_pct
+        stoploss, position_size_pct, max_allocation_pct, partial_sell_fraction = risk_params
 
         current_price = self.trade_executor.get_current_price(symbol)
         if current_price is None:
             logger.warning(f"Signal-based trading for {symbol}: Could not fetch current price.")
             return
 
+        # Summarize open position for this symbol (if any)
         position = self.get_open_position(symbol)
         current_allocation = position["total_invested"] if position else 0
 
-        if final_signal == 1:  # BUY signal
+        max_allocation_amount = total_capital * max_allocation_pct
+        desired_order_amount = total_capital * position_size_pct
+
+        if final_signal == 1:  # BUY
             if current_allocation < max_allocation_amount:
-                order_value = desired_order_amount if current_allocation == 0 else min(desired_order_amount, max_allocation_amount - current_allocation)
-                if free_usdt < order_value:
+                order_value = desired_order_amount
+                # If partially allocated, be sure not to exceed the maximum
+                if (current_allocation + order_value) > max_allocation_amount:
+                    order_value = max_allocation_amount - current_allocation
+                # Also ensure we don't exceed free_usdt
+                if order_value > free_usdt:
                     order_value = free_usdt
+
                 if order_value > 0:
-                    logger.info(f"Signal-based trading for {symbol}: Placing BUY order for {order_value} USDT.")
+                    logger.info(f"Signal-based trading for {symbol}: Placing BUY for {order_value:.2f} USDT.")
                     self.execute_buy_order(symbol, order_value)
                 else:
                     logger.info(f"Signal-based trading for {symbol}: Insufficient free USDT to BUY.")
             else:
-                logger.info(f"Signal-based trading for {symbol}: Position is at or above max allocation ({current_allocation} USDT).")
-        elif final_signal == -1:  # SELL signal
-            if position:
-                sell_units = position["units"] * partial_sell_fraction
-                logger.info(f"Signal-based trading for {symbol}: Placing SELL order for {sell_units} units (partial sell).")
-                self.execute_sell_order(symbol, sell_units)
+                logger.info(f"Signal-based trading for {symbol}: Position at or above max allocation.")
+        elif final_signal == -1:  # SELL
+            trades_list = self.trade_executor.portfolio.get(symbol, [])
+            total_units = sum(t["units"] for t in trades_list)
+            if total_units > 0:
+                # We do partial sells with FIFO
+                units_to_sell = total_units * partial_sell_fraction
+                logger.info(f"Signal-based trading for {symbol}: SELL signal => partial sell of {units_to_sell:.4f} units.")
+                self.execute_sell_order(symbol, units_to_sell)
             else:
                 logger.info(f"Signal-based trading for {symbol}: No open position to SELL on signal.")
 
         self.last_executed_signal_timestamp[symbol] = signal_timestamp
 
-
     def execute_buy_order(self, symbol, order_value_usdt):
         """
         Execute a market BUY order for the given symbol using the specified USDT order value.
-        The order value is interpreted as the USDT amount to spend.
+        Adds a new 'trade layer' (FIFO entry).
         """
+        current_price = self.trade_executor.get_current_price(symbol)
+        if current_price is None:
+            logger.warning(f"execute_buy_order: Could not fetch price for {symbol}.")
+            return None
+
+        if order_value_usdt <= 0:
+            logger.warning("execute_buy_order: order_value_usdt <= 0.")
+            return None
+
+        purchased_units = order_value_usdt / current_price
+
+        # Place the actual market order on the exchange
         response = self.trade_executor.place_order(
             symbol=symbol,
             order_type="market",
@@ -271,13 +301,32 @@ class TradeBot:
             amount=order_value_usdt
         )
         logger.info(f"Executed BUY order for {symbol}: {response}")
+
+        # Store the new trade in FIFO style
+        if symbol not in self.trade_executor.portfolio:
+            self.trade_executor.portfolio[symbol] = []
+        self.trade_executor.portfolio[symbol].append({
+            "entry_price": current_price,
+            "units": purchased_units
+        })
+
         return response
 
     def execute_sell_order(self, symbol, sell_units):
         """
-        Execute a market SELL order for the given symbol using the specified number of units.
-        The amount is interpreted in base currency units.
+        Execute a market SELL order for 'sell_units' of base asset in FIFO order.
+        Decrements or removes trades from the oldest to newest.
         """
+        current_price = self.trade_executor.get_current_price(symbol)
+        if current_price is None:
+            logger.warning(f"execute_sell_order: Could not fetch price for {symbol}.")
+            return None
+
+        if sell_units <= 0:
+            logger.warning("execute_sell_order: sell_units <= 0.")
+            return None
+
+        # Place the actual market order
         response = self.trade_executor.place_order(
             symbol=symbol,
             order_type="market",
@@ -285,5 +334,29 @@ class TradeBot:
             amount=sell_units
         )
         logger.info(f"Executed SELL order for {symbol}: {response}")
-        return response
 
+        trades_list = self.trade_executor.portfolio.get(symbol, [])
+        if not trades_list:
+            return response
+
+        remaining_to_sell = sell_units
+
+        # FIFO: reduce from the oldest trades
+        for i in range(len(trades_list)):
+            if remaining_to_sell <= 0:
+                break
+            trade = trades_list[i]
+            if trade["units"] <= remaining_to_sell:
+                # Sell all units of this layer
+                remaining_to_sell -= trade["units"]
+                trade["units"] = 0
+            else:
+                # Sell only partial
+                trade["units"] -= remaining_to_sell
+                remaining_to_sell = 0
+
+        # Remove empty layers
+        trades_list = [t for t in trades_list if t["units"] > 1e-8]
+        self.trade_executor.portfolio[symbol] = trades_list
+
+        return response

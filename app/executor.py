@@ -1,17 +1,14 @@
 import ccxt
 import logging
 import json
-import os 
+import os
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+from app.ui.api_credentials import load_api_credentials, save_api_credentials
 
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 class TradeExecutor:
-    """
-    A class to interact with the Bitget exchange using CCXT for trading.
-    """
-    PORTFOLIO_FILE = "data/portfolio.json"
 
     def __init__(self, api_key, api_secret, passphrase, testnet=False):
         """
@@ -34,9 +31,9 @@ class TradeExecutor:
             self.exchange.set_sandbox_mode(True)
 
         # State variables
-        self.portfolio = {}          
-        self.completed_trades = []   
-        self.processed_order_ids = set()  
+        self.portfolio = {}          # { symbol: [ { "entry_price": float, "units": float }, ... ] }
+        self.completed_trades = []   # Records of closed SELL trades with realized PnL
+        self.processed_order_ids = set()
 
         # Setup logging
         self._setup_logging()
@@ -66,20 +63,26 @@ class TradeExecutor:
         return None
 
     def _load_state(self):
-        """Load state from JSON files so we don't duplicate orders, trades, and positions."""
+        """
+        Load state from JSON files:
+          - portfolio.json
+          - completed_trades.json
+          - closed_orders.json (for processed_order_ids)
+        """
         try:
-            # Load closed orders (if needed, you might want to store them for reference)
+            # 1) Closed orders
             closed_orders = self._load_json("data/closed_orders.json")
             if closed_orders:
-                # If closed orders have an 'id', add them to processed_order_ids
                 for order in closed_orders:
                     if "id" in order:
                         self.processed_order_ids.add(order["id"])
-            # Load completed trades
+
+            # 2) Completed trades
             loaded_trades = self._load_json("data/completed_trades.json")
             if loaded_trades:
                 self.completed_trades = loaded_trades
-            # Load portfolio data
+
+            # 3) Portfolio
             loaded_portfolio = self._load_json("data/portfolio.json")
             if loaded_portfolio:
                 self.portfolio = loaded_portfolio
@@ -89,7 +92,7 @@ class TradeExecutor:
             logging.error(f"Error loading state from JSON files: {e}")
 
     def get_closed_orders(self):
-        """Fetch all closed orders and ensure correct size representation."""
+        """Fetch all closed orders from the exchange and save them to data/closed_orders.json."""
         try:
             closed_orders = self.exchange.fetch_closed_orders()
             orders = []
@@ -104,17 +107,14 @@ class TradeExecutor:
                 order_type = order.get("type", "")
                 side = order.get("side", "")
                 price = float(order.get("price", 0))
-                # Use "average" from the order for the executed price.
                 price_avg = float(order.get("average", 0))
                 amount = float(order.get("amount", 0))
-                # The exchange provides a "cost" field for the total cost in quote currency.
-                cost = float(order.get("cost", amount * price_avg))
+                cost = float(order.get("cost", price_avg * amount))
                 filled = float(order.get("filled", 0))
-                
-                # For limit orders, we might calculate size differently,
-                # but for now, we'll use cost as the USDT value.
+
+                # For limit orders, 'size' might differ, but we'll keep it simple:
                 if order_type == "limit":
-                    size = cost  # or you could use filled * price_avg
+                    size = cost
                 else:
                     size = cost
 
@@ -122,42 +122,32 @@ class TradeExecutor:
                     "id": order_id,
                     "datetime": formatted_datetime,
                     "symbol": order.get("symbol", ""),
-                    "size": size,  
+                    "size": size,
                     "price": price,
                     "orderType": order_type,
                     "side": side,
                     "priceAvg": price_avg,
                     "timestamp": timestamp,
-                    "filled": filled,  # new field
-                    "cost": cost       # new field
+                    "filled": filled,
+                    "cost": cost
                 })
 
             co = sorted(orders, key=lambda x: x["timestamp"], reverse=False)
             self._save_json("data/closed_orders.json", co)
-            return co 
+            return co
         except Exception as e:
             logging.error(f"Error fetching closed orders: {e}")
             return []
 
-    def fetch_open_positions(self):
-        """Rebuild open positions from the current state of self.portfolio."""
-        open_positions = [
-            {
-                "symbol": symbol,
-                "size": round(data["total_quantity"], 2),
-                "avg_price": round(data["avg_price"], 2) if data["total_quantity"] > 0 else 0,
-            }
-            for symbol, data in self.portfolio.items() if data["total_quantity"] > 0
-        ]
-        self._save_json("data/open_positions.json", open_positions)
-        return open_positions  
-
     def fetch_completed_trades_with_pnl(self):
-        """Fetch closed orders and calculate realized PnL while updating the portfolio
-        using delta updates. The portfolio state is maintained as:
-        - total_invested: Total USDT spent (or recovered) on the asset.
-        - units: Number of asset units held.
-        For sell orders, the realized PnL is computed based on the cost basis of the sold units.
+        """
+        Fetch closed orders from the exchange. For each new closed order:
+          - If it's a BUY, add a new FIFO layer to self.portfolio[symbol].
+          - If it's a SELL, remove units from the oldest layer(s) in self.portfolio[symbol].
+            Compute realized PnL for those sold units.
+
+        The resulting trades are appended to self.completed_trades, and we
+        save updated self.portfolio to 'data/portfolio.json' each time.
         """
         closed_orders = self.get_closed_orders()
 
@@ -170,88 +160,147 @@ class TradeExecutor:
             side = order["side"]
             timestamp = order["timestamp"]
 
-            # Get exchange-provided values:
-            # 'filled' is the number of asset units actually executed,
-            # 'cost' is the total USDT amount for this order.
-            filled = float(order.get("filled", 0))
-            order_cost = float(order.get("cost", filled * float(order.get("priceAvg", 0))))
+            # Exchange-provided data:
+            filled = float(order.get("filled", 0))    # number of base units
+            cost = float(order.get("cost", 0))        # total in quote currency (e.g. USDT)
             trade_price = float(order.get("priceAvg", 0))
             base_currency, quote_currency = symbol.split("/")
 
+            # Skip if no real fill
+            if filled <= 0:
+                self.processed_order_ids.add(order_id)
+                continue
+
+            # -------------- BUY --------------
             if side == "buy":
-                # Update portfolio for a buy order.
+                # If symbol not in portfolio, create an empty list
                 if symbol not in self.portfolio:
-                    self.portfolio[symbol] = {"total_invested": 0.0, "units": 0.0}
-                current_invested = self.portfolio[symbol]["total_invested"]
-                current_units = self.portfolio[symbol]["units"]
-
-                new_total_invested = current_invested + order_cost
-                new_units = current_units + filled
-                # New average buy price calculated as total invested / total units.
-                new_avg_price = new_total_invested / new_units if new_units > 0 else trade_price
-
-                self.portfolio[symbol]["total_invested"] = new_total_invested
-                self.portfolio[symbol]["units"] = new_units
-
-                # If the quote currency is USDT and there's a USDT/EUR entry, subtract the cost.
-                if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
-                    self.portfolio["USDT/EUR"]["total_invested"] -= order_cost
-
-            elif side == "sell":
-                # For sell orders, ensure the symbol exists in the portfolio.
-                if symbol not in self.portfolio:
-                    continue
-                current_invested = self.portfolio[symbol]["total_invested"]
-                current_units = self.portfolio[symbol]["units"]
-                if current_units <= 0:
-                    continue
-
-                # Determine effective units sold (should not exceed units held).
-                effective_sell_units = min(filled, current_units)
-                # Calculate average buy price from the portfolio.
-                avg_buy_price = current_invested / current_units if current_units > 0 else trade_price
-                # Cost basis for the sold units:
-                cost_basis = effective_sell_units * avg_buy_price
-                # Realized PnL in USDT:
-                realized_pnl_usdt = effective_sell_units * (trade_price - avg_buy_price)
-                pnl_percent = ((trade_price - avg_buy_price) / avg_buy_price * 100) if avg_buy_price else 0
-
-                # Update the portfolio by subtracting the sold units and the corresponding cost.
-                new_units = current_units - effective_sell_units
-                new_total_invested = current_invested - cost_basis
-                if new_units > 0:
-                    self.portfolio[symbol]["total_invested"] = new_total_invested
-                    self.portfolio[symbol]["units"] = new_units
-                else:
-                    del self.portfolio[symbol]
-
-                # Append the trade record.
-                self.completed_trades.append({
-                    "timestamp": timestamp,
-                    "symbol": symbol,
-                    "buy_price": round(avg_buy_price, 6),
-                    "sell_price": round(trade_price, 6),
-                    "units_sold": round(effective_sell_units, 6),
-                    "cost_basis": round(cost_basis, 2),
-                    "pnl_usdt": round(realized_pnl_usdt, 2),
-                    "pnl_percent": round(pnl_percent, 2)
+                    self.portfolio[symbol] = []
+                # Add a new FIFO layer
+                self.portfolio[symbol].append({
+                    "entry_price": trade_price,
+                    "units": filled
                 })
 
-                # If the quote currency is USDT and there's a USDT/EUR entry, add back the cost.
+                # If there's a "USDT/EUR" entry, we adjust it to reflect spent USDT
+                # But this logic is optional, depending on your usage
                 if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
-                    self.portfolio["USDT/EUR"]["total_invested"] += cost_basis
+                    # E.g. self.portfolio["USDT/EUR"]["total_invested"] -= cost
+                    pass
 
-            # Mark this order as processed.
+            # -------------- SELL --------------
+            elif side == "sell":
+                if symbol not in self.portfolio:
+                    # No position to sell; ignore
+                    self.processed_order_ids.add(order_id)
+                    continue
+
+                trades_list = self.portfolio[symbol]
+                if not trades_list:
+                    # Empty list means no open trades
+                    self.processed_order_ids.add(order_id)
+                    continue
+
+                remaining_to_sell = filled
+                realized_cost_basis = 0.0
+                realized_pnl_usdt = 0.0
+                sold_units_total = 0.0
+
+                # FIFO: remove from the oldest
+                i = 0
+                while remaining_to_sell > 0 and i < len(trades_list):
+                    layer = trades_list[i]
+                    layer_units = layer["units"]
+                    if layer_units <= 0:
+                        i += 1
+                        continue
+
+                    if layer_units <= remaining_to_sell:
+                        # Sell this entire layer
+                        cost_basis_for_layer = layer["entry_price"] * layer_units
+                        layer_pnl = layer_units * (trade_price - layer["entry_price"])
+
+                        realized_cost_basis += cost_basis_for_layer
+                        realized_pnl_usdt += layer_pnl
+                        sold_units_total += layer_units
+
+                        remaining_to_sell -= layer_units
+                        layer["units"] = 0
+                        i += 1
+                    else:
+                        # Partially sell this layer
+                        cost_basis_sold = layer["entry_price"] * remaining_to_sell
+                        pnl_sold = remaining_to_sell * (trade_price - layer["entry_price"])
+
+                        realized_cost_basis += cost_basis_sold
+                        realized_pnl_usdt += pnl_sold
+                        sold_units_total += remaining_to_sell
+
+                        layer["units"] -= remaining_to_sell
+                        remaining_to_sell = 0
+
+                # Remove empty layers
+                trades_list = [t for t in trades_list if t["units"] > 1e-8]
+                self.portfolio[symbol] = trades_list
+
+                if sold_units_total > 0:
+                    avg_buy_price_for_sold = realized_cost_basis / sold_units_total
+                    pnl_percent = 0.0
+                    if avg_buy_price_for_sold != 0:
+                        pnl_percent = (trade_price - avg_buy_price_for_sold) / avg_buy_price_for_sold * 100.0
+
+                    # Save the trade record
+                    self.completed_trades.append({
+                        "timestamp": timestamp,
+                        "symbol": symbol,
+                        "buy_price": round(avg_buy_price_for_sold, 6),
+                        "sell_price": round(trade_price, 6),
+                        "units_sold": round(sold_units_total, 6),
+                        "cost_basis": round(realized_cost_basis, 2),
+                        "pnl_usdt": round(realized_pnl_usdt, 2),
+                        "pnl_percent": round(pnl_percent, 2)
+                    })
+
+                # If there's a "USDT/EUR" entry, we might add the USDT back (depending on your logic)
+                if quote_currency == "USDT" and "USDT/EUR" in self.portfolio:
+                    # e.g. self.portfolio["USDT/EUR"]["total_invested"] += realized_cost_basis
+                    pass
+
+            # Mark this order as processed
             self.processed_order_ids.add(order_id)
 
-        # Sort completed trades by timestamp (oldest first).
+        # Sort completed trades by timestamp (oldest first) for readability
         self.completed_trades.sort(key=lambda x: x["timestamp"], reverse=False)
+
+        # Save updated portfolio & trades
         self._save_json("data/completed_trades.json", self.completed_trades)
         self._save_json("data/portfolio.json", self.portfolio)
+
         return self.completed_trades
 
+    def fetch_open_positions(self):
+        """
+        Rebuild a simple "open_positions" summary from self.portfolio in FIFO form.
+        Summarize how many total units are held per symbol.
+        """
+        open_positions = []
+        for symbol, trades_list in self.portfolio.items():
+            total_units = sum(t["units"] for t in trades_list)
+            if total_units > 0:
+                # Weighted average entry price
+                invested = sum(t["units"] * t["entry_price"] for t in trades_list)
+                avg_price = invested / total_units if total_units > 0 else 0
+                open_positions.append({
+                    "symbol": symbol,
+                    "size": round(total_units, 8),
+                    "avg_price": round(avg_price, 8)
+                })
+
+        self._save_json("data/open_positions.json", open_positions)
+        return open_positions
+
     def get_current_price(self, symbol):
-        """Fetch the latest market price for the given symbol."""
+        """Fetch the latest market price for the given symbol from the exchange."""
         try:
             ticker = self.exchange.fetch_ticker(symbol)
             return float(ticker["last"]) if "last" in ticker and ticker["last"] else None
@@ -264,7 +313,6 @@ class TradeExecutor:
         try:
             balance_data = self.exchange.fetch_balance()
             balances = []
-
             for asset, details in balance_data['total'].items():
                 if details > 0:
                     balances.append({
@@ -273,15 +321,17 @@ class TradeExecutor:
                         "available": balance_data['free'].get(asset, 0),
                         "reserved": balance_data['used'].get(asset, 0)
                     })
-
             return balances
         except Exception as e:
             logging.error(f"Error fetching account balance: {e}")
             return []
 
-    def place_order(self, symbol, order_type, side, amount, margin_mode=None, trade_side=None, price=None):
+    def place_order(self, symbol, order_type, side, amount,
+                    margin_mode=None, trade_side=None, price=None):
         """
-        Place an order on the Bitget exchange.
+        Place an order on the Bitget exchange (market or limit).
+        For a market BUY, 'amount' is the QUOTE amount (e.g., USDT).
+        For a market SELL, 'amount' is the BASE amount (e.g., BTC).
         """
         try:
             params = {}
@@ -290,26 +340,23 @@ class TradeExecutor:
             if trade_side:
                 params["tradeSide"] = trade_side
 
-            # Market buy order handling
             if order_type == "market" and side == "buy":
                 params["createMarketBuyOrderRequiresPrice"] = False
                 order = self.exchange.create_order(
                     symbol=symbol,
                     type="market",
                     side=side,
-                    amount=amount,  
+                    amount=amount,  # QUOTE amount for market BUY
                     params=params
                 )
-            # Market sell or other orders
-            elif order_type == "market" and side == 'sell':
+            elif order_type == "market" and side == "sell":
                 order = self.exchange.create_order(
                     symbol=symbol,
                     type="market",
                     side=side,
-                    amount=amount,
+                    amount=amount,  # BASE amount for market SELL
                     params=params
                 )
-            # Limit order
             elif order_type == "limit":
                 if not price:
                     raise ValueError("Price is required for limit orders.")
@@ -324,7 +371,6 @@ class TradeExecutor:
             else:
                 raise ValueError("Invalid order type. Use 'market' or 'limit'.")
 
-            # Log and return the order
             logging.info(f"Order placed: {order}")
             order_id = order.get("id", None)
             return {"order_id": order_id, "status": order["status"]}
@@ -336,17 +382,11 @@ class TradeExecutor:
     def check_order_status(self, order_id, symbol):
         """
         Check the status of an order on the exchange.
-
-        Args:
-            order_id (str): The unique order ID.
-            symbol (str): The trading pair (e.g., "BTC/USDT").
-
-        Returns:
-            str: The status of the order (e.g., "open", "closed", "canceled").
+        Possible returns: "open", "closed", "canceled", or "error".
         """
         try:
             order = self.exchange.fetch_order(order_id, symbol)
-            return order.get("status", "unknown")  # Possible values: "open", "closed", "canceled"
+            return order.get("status", "unknown")
         except Exception as e:
             print(f"Error checking order status for {order_id}: {e}")
             return "error"
