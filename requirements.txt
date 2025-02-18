@@ -1,5 +1,7 @@
-ccxt==4.4.47
+ccxt==4.4.60
 matplotlib==3.10.0
+numpy==2.2.3
+optuna==4.2.1
 pandas==2.2.3
 psycopg2_binary==2.9.10
 PyQt6==6.8.1
