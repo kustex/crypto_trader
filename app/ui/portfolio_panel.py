@@ -24,14 +24,15 @@ class PortfolioPanel(QWidget):
         self.open_positions_table.setHorizontalHeaderLabels([
             "Symbol", 
             "Total Invested (USDT)", 
-            "Avg Buy Price", 
-            "Current Price", 
             "Current Value (USDT)", 
+            "PnL (%)",
             "PnL (USDT)", 
-            "PnL (%)"
+            "Current Price", 
+            "Avg Buy Price", 
         ])
         # Allow manual adjustment of columns
         self.open_positions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # self.open_positions_table.setSortingEnabled(True)
         self.layout.addWidget(self.open_positions_table)
 
         # Closed Orders Label
@@ -43,10 +44,11 @@ class PortfolioPanel(QWidget):
         self.closed_orders_table = QTableWidget()
         self.closed_orders_table.setColumnCount(7)
         self.closed_orders_table.setHorizontalHeaderLabels([
-            "Datetime", "Symbol", "Size", "Price", "Order Type", "Side", "Price Avg"
+            "Datetime", "Symbol", "Side","Size", "Price", "Order Type",  "Price Avg"
         ])
         # Allow manual adjustment of columns
         self.closed_orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # self.closed_orders_table.setSortingEnabled(True)
         self.layout.addWidget(self.closed_orders_table)
 
         # Completed Trades Label
@@ -59,6 +61,7 @@ class PortfolioPanel(QWidget):
         # Column count and header labels will be set in update_completed_trades()
         # Allow manual adjustment of columns
         self.completed_trades_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # self.completed_trades_table.setSortingEnabled(True)
         self.layout.addWidget(self.completed_trades_table)
 
         # Account Balance Label
@@ -70,6 +73,7 @@ class PortfolioPanel(QWidget):
         self.account_balance_table = QTableWidget()
         # Allow manual adjustment of columns
         self.account_balance_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # self.account_balance_table.setSortingEnabled(True)
         self.layout.addWidget(self.account_balance_table)
 
         # Initial data load for all panels.
@@ -115,11 +119,11 @@ class PortfolioPanel(QWidget):
         for row, pos in enumerate(open_positions):
             self.open_positions_table.setItem(row, 0, QTableWidgetItem(pos["symbol"]))
             self.open_positions_table.setItem(row, 1, QTableWidgetItem(str(pos["total_invested"])))
-            self.open_positions_table.setItem(row, 2, QTableWidgetItem(str(pos["avg_buy_price"])))
-            self.open_positions_table.setItem(row, 3, QTableWidgetItem(str(pos["current_price"])))
-            self.open_positions_table.setItem(row, 4, QTableWidgetItem(str(pos["current_value"])))
-            self.open_positions_table.setItem(row, 5, QTableWidgetItem(str(pos["pnl_usdt"])))
-            self.open_positions_table.setItem(row, 6, QTableWidgetItem(f"{pos['pnl_percent']:.2f}%"))
+            self.open_positions_table.setItem(row, 2, QTableWidgetItem(str(pos["current_value"])))
+            self.open_positions_table.setItem(row, 3, QTableWidgetItem(f"{pos['pnl_percent']:.2f}%"))
+            self.open_positions_table.setItem(row, 4, QTableWidgetItem(str(pos["pnl_usdt"])))
+            self.open_positions_table.setItem(row, 5, QTableWidgetItem(str(pos["current_price"])))
+            self.open_positions_table.setItem(row, 6, QTableWidgetItem(str(pos["avg_buy_price"])))
         # Allow manual adjustment of columns
         self.open_positions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
@@ -130,10 +134,10 @@ class PortfolioPanel(QWidget):
         for row, order in enumerate(closed_orders):
             self.closed_orders_table.setItem(row, 0, QTableWidgetItem(order["datetime"]))
             self.closed_orders_table.setItem(row, 1, QTableWidgetItem(order["symbol"]))
-            self.closed_orders_table.setItem(row, 2, QTableWidgetItem(str(order["size"])))
-            self.closed_orders_table.setItem(row, 3, QTableWidgetItem(str(order["price"])))
-            self.closed_orders_table.setItem(row, 4, QTableWidgetItem(order["orderType"]))
-            self.closed_orders_table.setItem(row, 5, QTableWidgetItem(order["side"]))
+            self.closed_orders_table.setItem(row, 2, QTableWidgetItem(order["side"]))
+            self.closed_orders_table.setItem(row, 3, QTableWidgetItem(str(order["size"])))
+            self.closed_orders_table.setItem(row, 4, QTableWidgetItem(str(order["price"])))
+            self.closed_orders_table.setItem(row, 5, QTableWidgetItem(order["orderType"]))
             self.closed_orders_table.setItem(row, 6, QTableWidgetItem(str(order["priceAvg"])))
         # Allow manual adjustment of columns
         self.closed_orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -145,18 +149,18 @@ class PortfolioPanel(QWidget):
         self.completed_trades_table.setRowCount(len(completed_trades))
         self.completed_trades_table.setColumnCount(7)
         self.completed_trades_table.setHorizontalHeaderLabels([
-            "Datetime", "Symbol", "Buy Price", "Sell Price", "Units Sold", "Cost Basis (USDT)", "PnL (%)"
+            "Datetime", "Symbol", "Cost Basis (USDT)", "PnL (%)", "Buy Price", "Sell Price", "Units Sold"
         ])
         for row, trade in enumerate(completed_trades):
             # Convert timestamp to local time (UTC+1)
             formatted_datetime = datetime.fromtimestamp(trade["timestamp"] / 1000, tz=LOCAL_TZ).strftime("%d/%m/%Y - %H:%M")
             self.completed_trades_table.setItem(row, 0, QTableWidgetItem(formatted_datetime))
             self.completed_trades_table.setItem(row, 1, QTableWidgetItem(trade["symbol"]))
-            self.completed_trades_table.setItem(row, 2, QTableWidgetItem(str(trade["buy_price"])))
-            self.completed_trades_table.setItem(row, 3, QTableWidgetItem(str(trade["sell_price"])))
-            self.completed_trades_table.setItem(row, 4, QTableWidgetItem(str(trade.get("units_sold", "N/A"))))
-            self.completed_trades_table.setItem(row, 5, QTableWidgetItem(str(trade.get("cost_basis", "N/A"))))
-            self.completed_trades_table.setItem(row, 6, QTableWidgetItem(f"{trade['pnl_percent']:.2f}%"))
+            self.completed_trades_table.setItem(row, 2, QTableWidgetItem(str(trade.get("cost_basis", "N/A"))))
+            self.completed_trades_table.setItem(row, 3, QTableWidgetItem(f"{trade['pnl_percent']:.2f}%"))
+            self.completed_trades_table.setItem(row, 4, QTableWidgetItem(str(trade["buy_price"])))
+            self.completed_trades_table.setItem(row, 5, QTableWidgetItem(str(trade["sell_price"])))
+            self.completed_trades_table.setItem(row, 6, QTableWidgetItem(str(trade.get("units_sold", "N/A"))))
         # Allow manual adjustment of columns
         self.completed_trades_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 

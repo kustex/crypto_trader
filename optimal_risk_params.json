@@ -1,8 +1,0 @@
-{
-    "BTC/USDT": {
-        "stoploss": 0.06402020346764153,
-        "position_size": 0.04193296023710213,
-        "max_allocation": 0.2923741011166008,
-        "partial_sell_fraction": 0.20262101998290338
-    }
-}

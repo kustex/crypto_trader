@@ -24,16 +24,12 @@ class SignalManagementPanel:
         self.save_params_button = QPushButton("Save Parameters")
         self.save_params_button.clicked.connect(self.handle_save_button)
 
-        self.load_params_button = QPushButton("Load Parameters")
-        self.load_params_button.clicked.connect(self.load_parameters)  # ✅ New Load Button
-
         # ✅ Status Label
         self.status_label = QLabel("Status: Ready")
 
         self.layout.addWidget(self.include_15m_rvi_checkbox)
         self.layout.addLayout(self.param_grid)
         self.layout.addWidget(self.save_params_button)
-        self.layout.addWidget(self.load_params_button)  # ✅ Add below save button
         self.layout.addWidget(self.status_label)
 
         self.current_symbol = None
@@ -117,53 +113,8 @@ class SignalManagementPanel:
             # ✅ Call SignalController to regenerate signals and refresh the graph
             self.signal_controller.regenerate_signals_and_refresh(symbol, timeframe)
 
+            self.status_label.setText(f"✅ Finished regenerating signals for {symbol} ({timeframe}).")
+
         except ValueError:
             self.status_label.setText("❌ Invalid input! Enter valid numbers.")
 
-    def load_parameters(self):
-        """
-        Load saved **signal** parameters from file for the current symbol and update the UI.
-        """
-        if not os.path.exists(OPTIMAL_PARAMS_FILE):
-            self.status_label.setText("⚠️ No saved parameters found!")
-            return
-
-        if not self.current_symbol:
-            self.status_label.setText("⚠️ No symbol selected to load parameters!")
-            return
-
-        try:
-            with open(OPTIMAL_PARAMS_FILE, "r") as f:
-                all_params = json.load(f)
-
-            # Get parameters for the current symbol
-            if self.current_symbol not in all_params:
-                self.status_label.setText(f"⚠️ No parameters found for {self.current_symbol}!")
-                return
-
-            params = all_params[self.current_symbol]
-
-            # Define the expected signal parameter keys.
-            signal_param_keys = [
-                "keltner_upper_multiplier", "keltner_lower_multiplier", "keltner_period",
-                "rvi_15m_period", "rvi_1h_period",
-                "rvi_15m_upper_threshold", "rvi_15m_lower_threshold",
-                "rvi_1h_upper_threshold", "rvi_1h_lower_threshold"
-            ]
-
-            # Extract parameter values.
-            param_values = [params[key] for key in signal_param_keys]
-
-            # Update the UI input fields with the loaded parameter values.
-            for row, value in enumerate(param_values):
-                self.param_inputs[row].setText(str(value))
-
-            # Update the checkbox separately.
-            self.include_15m_rvi_checkbox.setChecked(bool(params.get("include_15m_rvi", 0)))
-
-            self.status_label.setText("✅ Signal Parameters Loaded Successfully!")
-
-        except KeyError as e:
-            self.status_label.setText(f"❌ Missing parameter: {str(e)}")
-        except Exception as e:
-            self.status_label.setText(f"❌ Error loading parameters: {str(e)}")

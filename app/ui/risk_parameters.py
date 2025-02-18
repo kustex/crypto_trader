@@ -4,7 +4,6 @@ import json
 import os
 
 ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
-RISK_PARAMS_FILE = "optimal_risk_params.json"  # ✅ Load best risk parameters from here
 
 class RiskManagementPanel:
     def __init__(self, db_manager: DatabaseManager):
@@ -36,47 +35,12 @@ class RiskManagementPanel:
         self.save_button.clicked.connect(self.handle_save_button)
         self.layout.addWidget(self.save_button)
 
-        # ✅ "Load Optimal Risk Parameters" Button
-        self.load_params_button = QPushButton("Load Optimal Risk Parameters")
-        self.load_params_button.clicked.connect(self.load_optimal_parameters)  # ✅ Load best risk parameters
-        self.layout.addWidget(self.load_params_button)
-
         # ✅ Status Label
         self.status_label = QLabel("Status: Ready")
         self.layout.addWidget(self.status_label)
 
         # Store the current symbol for which risk parameters are managed
         self.current_symbol = None
-
-    def load_optimal_parameters(self):
-        """
-        Load **optimal** risk parameters from the backtester and update the UI.
-        """
-        if not os.path.exists(RISK_PARAMS_FILE):
-            self.status_label.setText("⚠️ No saved optimal risk parameters found!")
-            return
-
-        try:
-            with open(RISK_PARAMS_FILE, "r") as f:
-                params = json.load(f)
-
-            # ✅ Ensure only risk parameters are loaded (4 values)
-            risk_param_keys = [
-                "stoploss", "position_size", "max_allocation", "partial_sell_fraction"
-            ]
-
-            param_values = [params[key] for key in risk_param_keys if key in params]  # ✅ Extract only risk parameters
-
-            # ✅ Update only risk parameter inputs
-            for row, value in enumerate(param_values):
-                self.param_inputs[row].setText(str(value))
-
-            self.status_label.setText("✅ Optimal Risk Parameters Loaded Successfully!")
-
-        except KeyError as e:
-            self.status_label.setText(f"❌ Missing parameter: {str(e)}")
-        except Exception as e:
-            self.status_label.setText(f"❌ Error loading risk parameters: {str(e)}")
 
     def load_algorithm_config(self):
         """Load the algorithm configuration from file and ensure all tickers are present."""

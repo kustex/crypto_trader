@@ -1,5 +1,4 @@
 import time
-
 from PyQt6.QtWidgets import (
     QVBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
@@ -21,10 +20,13 @@ class OrdersPanel:
         # Create main layout
         self.layout = QVBoxLayout()
 
+        # 1) Ticker Label
+        self.ticker_label = QLabel("")     
+        self.layout.addWidget(self.ticker_label)
+
         # Order Type Selection
         self.order_type_combo = QComboBox()
         self.order_type_combo.addItems(["Market", "Limit"])
-        self.layout.addWidget(QLabel(f"Order Type: {self.selected_ticker}"))
         self.layout.addWidget(self.order_type_combo)
 
         # Limit Price Input (Hidden by Default)
@@ -66,6 +68,10 @@ class OrdersPanel:
         Reset order-related UI fields when a new ticker is selected.
         """
         self.selected_ticker = selected_ticker
+
+        # 2) Update the ticker label text so it shows the new ticker
+        self.ticker_label.setText(selected_ticker if selected_ticker else "")
+
         self.order_type_combo.setCurrentIndex(0)  
         self.limit_price_input.clear()
         self.limit_price_input.setVisible(False)
@@ -115,7 +121,6 @@ class OrdersPanel:
         is_limit_order = self.order_type_combo.currentText() == "Limit"
         self.limit_price_label.setVisible(is_limit_order)
         self.limit_price_input.setVisible(is_limit_order)
-
 
     def buy_ticker(self):
         """

@@ -85,7 +85,7 @@ class TickerApp(QMainWindow):
         self.orders_panel = OrdersPanel(self.db_manager, self.trade_executor, self)
         self.portfolio_panel = PortfolioPanel(self.trade_executor, self.db_manager)
         self.tickers_panel = TickersPanel(self.db_manager, self.plot_canvas, self.signal_management, self.orders_panel, self.risk_management, self.trade_executor)
-        self.backtest_widget = BacktestPanel(self.db_manager)
+        self.backtest_widget = BacktestPanel()
 
         # Create tab interface
         self.tabs = QTabWidget(self)

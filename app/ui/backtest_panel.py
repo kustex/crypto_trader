@@ -1,171 +1,232 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QLabel, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QProgressBar, QLineEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTableWidget,
+    QTableWidgetItem, QProgressBar, QLineEdit, QApplication
 )
-from PyQt6.QtCore import QThread, pyqtSignal
-import os
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+import sys
+from datetime import date, timedelta
 import pandas as pd
+import ccxt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 from sqlalchemy import text
-from app.database import DatabaseManager
 from app.backtest.backtest_engine import BacktestEngine
 
-class OptimizationThread(QThread):
-    progress_signal = pyqtSignal(int)   # Signal to update progress bar
-    finished_signal = pyqtSignal(dict)  # Signal to update UI when done
+# Define parameter names and default values.
+PARAMETER_NAMES = [
+    "Keltner Upper Multiplier", "Keltner Lower Multiplier",
+    "Keltner Period", "RVI 15m Period", "RVI 1h Period",
+    "RVI 15m Upper Threshold", "RVI 15m Lower Threshold",
+    "RVI 1h Upper Threshold", "RVI 1h Lower Threshold",
+    "Include 15m RVI", "Stop-Loss %", "Position Size %",
+    "Max Allocation %", "Partial Sell %"
+]
+DEFAULT_VALUES = [
+    2.0, 2.0, 20, 10, 14, 0.3, -0.3, 0.3, -0.3, 0, 0.1, 0.05, 0.2, 0.5
+]
 
-    def __init__(self, backtest_engine, max_evals=50):
+class DataFetchThread(QThread):
+    data_fetched = pyqtSignal(str, pd.DataFrame)  # Emits (timeframe, DataFrame)
+    error = pyqtSignal(str, str)  # Emits (timeframe, error message)
+    
+    def __init__(self, ticker, timeframe, start_date, end_date):
         super().__init__()
-        self.backtest_engine = backtest_engine
-        self.max_evals = max_evals
+        self.ticker = ticker
+        self.timeframe = timeframe
+        self.start_date = start_date
+        self.end_date = end_date
 
     def run(self):
-        """Run optimization in a separate thread."""
-        print("🚀 Running Parameter Optimization in Background Thread...")
-        best_params = None
-
-        # Run one iteration at a time so we can update the progress bar
-        for i in range(1, self.max_evals + 1):
-            best_params = self.backtest_engine.optimize_parameters(max_evals=1)
-            progress = int((i / self.max_evals) * 100)
-            self.progress_signal.emit(progress)
-        self.finished_signal.emit(best_params)
-
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            req_start = pd.to_datetime(self.start_date)
+            req_end = pd.to_datetime(self.end_date)
+            since = int(req_start.timestamp() * 1000)
+            end_ts = int(req_end.timestamp() * 1000)
+            ohlcv = []
+            limit = 1000
+            while True:
+                data = exchange.fetch_ohlcv(self.ticker, self.timeframe, since=since, limit=limit)
+                if not data:
+                    break
+                ohlcv += data
+                last = data[-1][0]
+                if last >= end_ts:
+                    break
+                since = last + 1
+            df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df[(df["timestamp"] >= req_start) & (df["timestamp"] <= req_end)]
+            self.data_fetched.emit(self.timeframe, df)
+        except Exception as e:
+            self.error.emit(self.timeframe, str(e))
 
 class BacktestPanel(QWidget):
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self):
         super().__init__()
-        self.db_manager = db_manager
         self.backtest_engine = BacktestEngine()
+        # In-memory cache keyed by (ticker, timeframe, start_date, end_date)
+        self.data_cache = {}
+        self.thread1 = None  # For 1h data
+        self.thread2 = None  # For 15m data
         self.init_ui()
-        self.optimization_thread = None  
 
     def init_ui(self):
-        """Initialize the Backtest UI."""
-        layout = QVBoxLayout()
+        """Initialize the UI with left column (inputs) and right column (plots)."""
+        main_layout = QHBoxLayout()
 
-        # --- Ticker Input ---
+        # LEFT COLUMN
+        left_layout = QVBoxLayout()
+        
+        # Ticker Input
         ticker_layout = QHBoxLayout()
         ticker_label = QLabel("Ticker:")
         self.ticker_input = QLineEdit()
-        self.ticker_input.setText("BTC/USDT")  
+        self.ticker_input.setText("BTC/USDT")
         ticker_layout.addWidget(ticker_label)
         ticker_layout.addWidget(self.ticker_input)
-        layout.addLayout(ticker_layout)
-
-        # --- Parameter Table ---
-        self.signal_param_table = QTableWidget(14, 2)
+        left_layout.addLayout(ticker_layout)
+        
+        # Date Range Inputs
+        date_layout = QHBoxLayout()
+        start_date_label = QLabel("Start Date:")
+        self.start_date_input = QLineEdit()
+        self.start_date_input.setPlaceholderText("YYYY-MM-DD")
+        today = date.today()
+        self.start_date_input.setText(f"{today - timedelta(weeks=52)}")
+        end_date_label = QLabel("End Date:")
+        self.end_date_input = QLineEdit()
+        self.end_date_input.setPlaceholderText("YYYY-MM-DD")
+        self.end_date_input.setText(f"{today}")
+        date_layout.addWidget(start_date_label)
+        date_layout.addWidget(self.start_date_input)
+        date_layout.addWidget(end_date_label)
+        date_layout.addWidget(self.end_date_input)
+        left_layout.addLayout(date_layout)
+        
+        # Parameter Table
+        self.signal_param_table = QTableWidget(len(PARAMETER_NAMES), 2)
         self.signal_param_table.setHorizontalHeaderLabels(["Parameter", "Value"])
-        self.signal_param_table.setVerticalHeaderLabels([
-            "Keltner Upper Multiplier", "Keltner Lower Multiplier",
-            "Keltner Period", "RVI 15m Period", "RVI 1h Period",
-            "RVI 15m Upper Threshold", "RVI 15m Lower Threshold",
-            "RVI 1h Upper Threshold", "RVI 1h Lower Threshold",
-            "Include 15m RVI", "Stop-Loss %", "Position Size %",
-            "Max Allocation %", "Partial Sell %"
-        ])
-
-        # --- Buttons ---
+        for row, name in enumerate(PARAMETER_NAMES):
+            item_name = QTableWidgetItem(name)
+            item_value = QTableWidgetItem(str(DEFAULT_VALUES[row]))
+            self.signal_param_table.setItem(row, 0, item_name)
+            self.signal_param_table.setItem(row, 1, item_value)
+        left_layout.addWidget(self.signal_param_table)
+        
+        # Run Backtest Button
         self.run_backtest_button = QPushButton("Run Backtest")
         self.run_backtest_button.clicked.connect(self.run_backtest)
-
-        self.optimize_button = QPushButton("Optimize Parameters")
-        self.optimize_button.clicked.connect(self.start_optimization)
-
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.run_backtest_button)
-        button_layout.addWidget(self.optimize_button)
-
-        # --- Progress Bar & Status ---
+        left_layout.addWidget(self.run_backtest_button)
+        
+        # Progress Bar and Status Label
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
+        left_layout.addWidget(self.progress_bar)
         self.status_label = QLabel("Status: Ready")
-
-        # --- Matplotlib Figure with Dual Plots ---
-        # Top plot: Equity Curve; Bottom plot: Invested Capital %
+        left_layout.addWidget(self.status_label)
+        
+        # RIGHT COLUMN
+        right_layout = QVBoxLayout()
         self.figure, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(8, 10))
         self.canvas = FigureCanvas(self.figure)
-
-        # --- Statistics Label ---
-        self.stats_label = QLabel("PnL: - | Sharpe Ratio: - | Sortino Ratio: - | Max Drawdown: - | Trades: -")
-
-        # --- Assemble Layout ---
-        layout.addWidget(self.signal_param_table)
-        layout.addLayout(button_layout)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.canvas)
-        layout.addWidget(self.stats_label)
-        self.setLayout(layout)
-
-    def start_optimization(self):
-        """
-        Runs Bayesian Optimization in a background thread.
-        The current ticker is passed to the backtest engine so that
-        the optimal parameters are saved under that ticker.
-        """
-        print("🚀 Starting Background Parameter Optimization...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.status_label.setText("🔄 Optimizing parameters...")
-
-        # Pass the current ticker to the backtest engine
-        self.backtest_engine.ticker = self.ticker_input.text()
-
-        self.optimization_thread = OptimizationThread(self.backtest_engine, max_evals=50)
-        self.optimization_thread.progress_signal.connect(self.progress_bar.setValue)
-        self.optimization_thread.finished_signal.connect(self.on_optimization_complete)
-        self.optimization_thread.start()
-
-    def on_optimization_complete(self, best_params):
-        """
-        Called when optimization completes.
-        Updates the UI with the best parameters found.
-        """
-        print("✅ Optimization Complete. Updating UI...")
-        self.progress_bar.setValue(100)
-        self.status_label.setText("✅ Optimization Complete. Parameters saved!")
-        # Update the parameter table with the best parameters
-        param_values = list(best_params.values())
-        for row, value in enumerate(param_values):
-            self.signal_param_table.setItem(row, 1, QTableWidgetItem(str(round(value, 4))))
-        print("✅ Best Parameters Updated in UI!")
+        right_layout.addWidget(self.canvas)
+        self.stats_label = QLabel("PnL: - | Sharpe Ratio: - | Max Drawdown: - | Trades: -")
+        right_layout.addWidget(self.stats_label)
+        
+        main_layout.addLayout(left_layout, 1)
+        main_layout.addLayout(right_layout, 2)
+        self.setLayout(main_layout)
 
     def run_backtest(self):
-        """Run the backtest using current parameters and display the results."""
+        """Run the backtest using parameters and date range from the UI."""
         params = self.get_parameters()
-        # Pass the current ticker to the backtest engine
-        self.backtest_engine.ticker = self.ticker_input.text()
+        self.backtest_engine.ticker = self.ticker_input.text().strip()
+        self.status_label.setText("Status: Loading data...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        
+        ticker = self.ticker_input.text().strip()
+        start_date = self.start_date_input.text().strip()
+        end_date = self.end_date_input.text().strip()
+        
+        # Build cache keys for 1h and 15m.
+        key1h = (ticker, "1h", start_date, end_date)
+        key15m = (ticker, "15m", start_date, end_date)
+        
+        # Launch background threads if data not in cache.
+        if key1h not in self.data_cache:
+            self.thread1 = DataFetchThread(ticker, "1h", start_date, end_date)
+            self.thread1.data_fetched.connect(lambda tf, df: self.store_in_cache(tf, df, params))
+            self.thread1.error.connect(lambda tf, err: self.status_label.setText(f"Error ({tf}): {err}"))
+            self.thread1.start()
+        else:
+            print("Using in-memory cache for", key1h)
+        
+        if key15m not in self.data_cache:
+            self.thread2 = DataFetchThread(ticker, "15m", start_date, end_date)
+            self.thread2.data_fetched.connect(lambda tf, df: self.store_in_cache(tf, df, params))
+            self.thread2.error.connect(lambda tf, err: self.status_label.setText(f"Error ({tf}): {err}"))
+            self.thread2.start()
+        else:
+            print("Using in-memory cache for", key15m)
+        
+        # Check periodically if both datasets are available.
+        self.check_and_run_backtest(params)
 
-        df = self.get_historical_data(timeframe="1h")
-        df_15m = self.get_historical_data(timeframe="15m") if params["include_15m_rvi"] else None
+    def store_in_cache(self, timeframe, df, params):
+        """Store fetched data in cache."""
+        ticker = self.ticker_input.text().strip()
+        start_date = self.start_date_input.text().strip()
+        end_date = self.end_date_input.text().strip()
+        key = (ticker, timeframe, start_date, end_date)
+        self.data_cache[key] = df.copy()
+        print(f"Cached {timeframe} data for", key)
+        self.check_and_run_backtest(params)
 
-        if df is None:
-            self.stats_label.setText("⚠️ No data available for backtesting.")
-            return
+    def check_and_run_backtest(self, params):
+        """If both 1h and 15m data (if required) are cached, run the backtest."""
+        ticker = self.ticker_input.text().strip()
+        start_date = self.start_date_input.text().strip()
+        end_date = self.end_date_input.text().strip()
+        key1h = (ticker, "1h", start_date, end_date)
+        key15m = (ticker, "15m", start_date, end_date)
+        
+        if params["include_15m_rvi"]:
+            if key1h in self.data_cache and key15m in self.data_cache:
+                df1h = self.data_cache[key1h].copy()
+                df15m = self.data_cache[key15m].copy()
+                self.run_backtest_with_data(df1h, df15m, params)
+        else:
+            if key1h in self.data_cache:
+                df1h = self.data_cache[key1h].copy()
+                self.run_backtest_with_data(df1h, None, params)
 
-        df = self.backtest_engine.calculate_indicators(df, df_15m, params)
+    def run_backtest_with_data(self, df1h, df15m, params):
+        """Run the backtest with the provided data and update the UI."""
+        self.status_label.setText("Status: Data loaded. Running backtest...")
+        df = self.backtest_engine.calculate_indicators(df1h, df15m, params)
         df = self.backtest_engine.generate_signals(df, params)
-
         try:
             df, stats = self.backtest_engine.run_backtest(df, params)
             if df is None or stats is None:
                 raise ValueError("❌ run_backtest() returned invalid data!")
         except Exception as e:
-            print(f"❌ Error in run_backtest(): {e}")
+            self.status_label.setText(f"Error in backtest: {e}")
             return
 
-        # --- Plot Equity Curve ---
+        equity_title = (
+            f"Backtest Equity Curve {self.ticker_input.text().strip()} | PnL: {stats.get('PnL', 0):.2f} | "
+            f"Sharpe: {stats.get('Sharpe', 0):.2f} | Max Drawdown: {stats.get('MaxDrawdown', 0):.2f}%"
+        )
         self.ax1.clear()
         self.ax1.plot(df['timestamp'], df["equity"], label="Equity Curve", color="blue")
-        self.ax1.set_title("Backtest Equity Curve")
+        self.ax1.set_title(equity_title)
         self.ax1.set_xlabel("Time")
         self.ax1.set_ylabel("Equity")
         self.ax1.legend()
 
-        # --- Plot Invested Capital % ---
         self.ax2.clear()
         self.ax2.plot(df['timestamp'], df["invested_pct"], label="Invested Capital %", color="green")
         self.ax2.set_title("Invested Capital % of Total")
@@ -174,19 +235,15 @@ class BacktestPanel(QWidget):
         self.ax2.legend()
 
         self.canvas.draw()
-
-        # --- Update Statistics ---
         self.stats_label.setText(
-            f"PnL: {stats['PnL']:.2f} | Sharpe Ratio: {stats['Sharpe Ratio']:.2f} | "
-            f"Sortino Ratio: {stats['Sortino Ratio']:.2f} | Max Drawdown: {stats['Max Drawdown']:.2f}% | "
-            f"Trades: {stats['Trades']}"
+            f"PnL: {stats.get('PnL', 0):.2f} | Sharpe: {stats.get('Sharpe', 0):.2f} | "
+            f"Max Drawdown: {stats.get('MaxDrawdown', 0):.2f}% | Trades: {stats.get('Trades', 0)}"
         )
+        self.status_label.setText("Status: Backtest complete")
+        self.progress_bar.setVisible(False)
 
     def get_parameters(self):
-        """
-        Retrieve user-defined backtest parameters from the table.
-        Converts integer parameters safely.
-        """
+        """Retrieve parameters from the parameter table."""
         def safe_int(value):
             return int(float(value))
         params = {
@@ -209,17 +266,25 @@ class BacktestPanel(QWidget):
 
     def get_historical_data(self, timeframe="1h"):
         """
-        Fetch historical market data for the given timeframe.
+        Retrieve historical market data from Binance using ccxt.
+        Uses the in-memory cache keyed by (ticker, timeframe, start_date, end_date).
         """
-        ticker = self.ticker_input.text()
-        query = text(f"""
-            SELECT timestamp, open, high, low, close, volume
-            FROM historical_data
-            WHERE symbol = '{ticker}' AND timeframe = '{timeframe}'
-            ORDER BY timestamp ASC
-        """)
-        with self.db_manager.engine.connect() as connection:
-            result = connection.execute(query)
-            df = pd.DataFrame(result.fetchall(), columns=[col.lower().strip() for col in result.keys()])
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df
+        ticker = self.ticker_input.text().strip()
+        start_date = self.start_date_input.text().strip()
+        end_date = self.end_date_input.text().strip()
+        key = (ticker, timeframe, start_date, end_date)
+        if key in self.data_cache:
+            return self.data_cache[key].copy()
+        else:
+            self.status_label.setText("Status: Loading data...")
+            self.data_thread = DataFetchThread(ticker, timeframe, start_date, end_date)
+            self.data_thread.data_fetched.connect(lambda df: self.on_data_fetched(df, self.get_parameters()))
+            self.data_thread.error.connect(lambda err: self.status_label.setText(f"Error: {err}"))
+            self.data_thread.start()
+            return pd.DataFrame()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    panel = BacktestPanel()
+    panel.show()
+    sys.exit(app.exec())

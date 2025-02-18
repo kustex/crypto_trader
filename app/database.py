@@ -675,3 +675,17 @@ class DatabaseManager:
 
         with self.engine.connect() as connection:
             return pd.read_sql(query, connection, params=params)
+
+    def get_historical_data(self, ticker, timeframe="1h"):
+        query = text(f"""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_data
+            WHERE symbol = '{ticker}' AND timeframe = '{timeframe}'
+            ORDER BY timestamp ASC
+        """)
+        with self.engine.connect() as conn:
+            result = conn.execute(query)
+            df = pd.DataFrame(result.fetchall(), columns=[col.lower().strip() for col in result.keys()])
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
