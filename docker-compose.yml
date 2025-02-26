@@ -29,9 +29,7 @@ services:
       POSTGRES_DB: crypto_data
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 7aGpc4Uj
-      # BITGET_API_KEY: "bg_50fd7ac311bad69ae30f93c18f925786"
-      # BITGET_API_SECRET: "daa4e88b6b6fb367ac184ed437228e0985ae6fc4b7d119c89b612fa78267e8a3"
-      # BITGET_API_PASSPHRASE: "123456879"
+
       # For X11 forwarding: use host.docker.internal on Windows;
       # On Linux, you may also mount /tmp/.X11-unix.
       DISPLAY: host.docker.internal:0

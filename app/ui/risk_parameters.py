@@ -42,6 +42,13 @@ class RiskManagementPanel:
         # Store the current symbol for which risk parameters are managed
         self.current_symbol = None
 
+    def get_algorithm_state(self):
+        """Return the current algorithm state for the selected symbol."""
+        if self.current_symbol:
+            config = self.load_algorithm_config()
+            return config.get(self.current_symbol, False)
+        return False
+
     def load_algorithm_config(self):
         """Load the algorithm configuration from file and ensure all tickers are present."""
         config = {}

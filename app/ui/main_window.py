@@ -205,7 +205,7 @@ class TickerApp(QMainWindow):
         - Portfolio panels (open positions, closed orders, completed trades)
         - Graph (via plot_canvas) using the currently selected ticker and timeframe
         - Tickers table with current live prices and 24h % change
-        - Status label with current timestamp.
+        - Status label with current timestamp and algorithm status.
         """
         # Update portfolio-related panels.
         self.portfolio_panel.update_open_positions()
@@ -220,9 +220,16 @@ class TickerApp(QMainWindow):
         # Refresh the tickers table (which now uses live prices).
         self.tickers_panel.load_tickers()
 
-        self.status_label.setText(
-            f"System Status: Updated at {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        # Update the algorithm status based on the current symbol
+        if self.risk_management.current_symbol:
+            algorithm_state = "ON" if self.risk_management.get_algorithm_state() else "OFF"
+            self.status_label.setText(
+                f"System Status: Updated at {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S')} | Algorithm: {algorithm_state}"
+            )
+        else:
+            self.status_label.setText(
+                f"System Status: Updated at {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S')} | Algorithm: OFF"
+            )
 
     def update_portfolio(self):
         """Update portfolio panel after a trade is executed."""
