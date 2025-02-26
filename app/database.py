@@ -9,32 +9,29 @@ from sqlalchemy.exc import IntegrityError
 
 
 class DatabaseManager:
-    """
-    Manages database operations including initialization, querying, and saving data.
-    """
-
     def __init__(self):
-        """
-        Initialize the DatabaseManager.
+        # Instead of this:
+        # self.POSTGRES_HOST = "127.0.0.1"
 
-        :param db_path: Path to the SQLite database file.
-        """
-        self.POSTGRES_USER = "postgres"
-        self.POSTGRES_PASSWORD = "7aGpc4Uj"  
-        self.POSTGRES_DBNAME = "crypto_data"
-        self.POSTGRES_HOST = "127.0.0.1"  
-        self.POSTGRES_PORT = "5432"
+        # Use environment variables so we can override them at runtime
+        import os
+        self.POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+        self.POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+        self.POSTGRES_DBNAME = os.getenv("POSTGRES_DB", "crypto_data")
+        self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "db")
+        self.POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
-        # Create the database if it doesn't exist
+        # Then your create_engine call can use these variables
         self._create_database_if_not_exists()
 
         self.engine = create_engine(
             f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DBNAME}",
-            pool_size=10,  
-            max_overflow=5, 
-            isolation_level="READ COMMITTED",  
+            pool_size=10,
+            max_overflow=5,
+            isolation_level="READ COMMITTED",
         )
         self.create_tickers_table()
+
 
     def _create_database_if_not_exists(self):
         """

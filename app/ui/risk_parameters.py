@@ -48,7 +48,9 @@ class RiskManagementPanel:
         if os.path.exists(ALGORITHM_CONFIG_FILE):
             with open(ALGORITHM_CONFIG_FILE, "r") as f:
                 config = json.load(f)
-        # Fetch tickers from the database and ensure each ticker is in the config.
+        else:
+            with open(ALGORITHM_CONFIG_FILE, "w") as f:
+                json.dump(config, f) 
         tickers_df = self.db_manager.fetch_tickers()
         if tickers_df is not None and not tickers_df.empty:
             tickers = tickers_df["symbol"].tolist()
