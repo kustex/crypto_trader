@@ -146,20 +146,12 @@ docker run --rm \
 
 ---
 
-## Documentation
-- **Core components:** Dashboard, Signal Engine (Keltner + RVI + optional 15m filter), Backtester, Orders & Portfolio.  
-- **Usage flow:** select ticker & timeframe → adjust params → regenerate signals → (optional) backtest → place order.  
-- **Notes:** Candles/signals stored in **UTC**; UI can display local time.
-
----
-
 ## Roadmap
 - Batch backtests & parameter sweeps  
 - Strategy plug‑ins (more indicators/filters)  
 - Risk overlays on chart (stops/targets)  
 - CSV/Parquet export  
-- Dockerized dev setup
-
+- ...
 ---
 
 ## License
