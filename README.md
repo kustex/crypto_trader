@@ -1,3 +1,5 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 # Crypto Trader — Signals, Backtests & One‑Click Orders
 
 ## What
