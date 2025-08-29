@@ -32,7 +32,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 class DataHandler:
     """Handles fetching, validation, and storage of historical crypto data."""
     EXCHANGE_NAME = "binance"
@@ -162,7 +161,6 @@ class DataHandler:
             logger.warning("Negative volume values detected")
             return False
         return True
-
 
 class DataUpdater:
     """Manages scheduled data updates, signal generation, and triggers trade execution."""
@@ -294,9 +292,26 @@ class DataUpdater:
         """
         Trigger trade logic for each active symbol by calling risk management
         and signal-based trading functions on the TradeBot instance.
+        Fetches EUR/USD rate once to avoid rate limiting.
         """
+        if not symbols:
+            return
+            
+        eur_usd_rate = None
+        try:
+            import yfinance as yf
+            ticker_yf = yf.Ticker("EURUSD=X")
+            data = ticker_yf.history(period="1d", interval="1h")
+            if not data.empty:
+                eur_usd_rate = data['Close'].iloc[-1]
+                logger.debug(f"Pre-fetched EUR/USD rate: {eur_usd_rate}")
+        except Exception as e:
+            logger.warning(f"Could not pre-fetch EUR/USD rate: {e}")
+            eur_usd_rate = 1.09  # Default fallback value
+            
+        # Process each symbol with the cached rate
         for symbol in symbols:
-            self.trade_bot.execute_signal_based_trading_for_symbol(symbol)
+            self.trade_bot.execute_signal_based_trading_for_symbol(symbol, cached_eur_usd_rate=eur_usd_rate)
 
 class Scheduler:
     """Manages the scheduling of update tasks."""

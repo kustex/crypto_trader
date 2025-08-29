@@ -75,7 +75,7 @@ class TickerApp(QMainWindow):
 
         # Initialize database & trading components
         self.db_manager = DatabaseManager()
-        self.trade_executor = TradeExecutor(API_KEY, API_SECRET, API_PASSPHRASE)
+        self.trade_executor = TradeExecutor()
         self.plot_canvas = PlotCanvas(self.db_manager)
         self.signal_controller = SignalController(self.db_manager, self.plot_canvas)
         self.signal_management = SignalManagementPanel(self.db_manager, self.signal_controller)
@@ -105,7 +105,7 @@ class TickerApp(QMainWindow):
         # UI Timer for auto-updates
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self.update_ui)
-        self.ui_timer.start(60 * 1000)
+        self.ui_timer.start(60 * 2000)
 
         # Load initial tickers
         self.initialize_tickers()

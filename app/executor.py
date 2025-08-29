@@ -10,33 +10,55 @@ LOCAL_TZ = timezone(timedelta(hours=1))
 
 class TradeExecutor:
 
-    def __init__(self, api_key, api_secret, passphrase, testnet=False):
+    def __init__(self, api_key=None, api_secret=None, passphrase=None, testnet=False):
         """
         Initialize the Bitget client and load persisted state.
+        If API credentials aren't provided, they will be loaded automatically.
         """
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.passphrase = passphrase
+        # Setup logging first so we can log during initialization
+        self._setup_logging()
+        
+        # If any credentials are missing, load them from the credentials file
+        if api_key is None or api_secret is None or passphrase is None:
+            from app.ui.api_credentials import load_api_credentials
+            loaded_key, loaded_secret, loaded_passphrase = load_api_credentials()
+            
+            # Only override if the parameter wasn't provided
+            self.api_key = api_key if api_key is not None else loaded_key
+            self.api_secret = api_secret if api_secret is not None else loaded_secret
+            self.passphrase = passphrase if passphrase is not None else loaded_passphrase
+            
+            logging.debug("API credentials loaded from credentials file")
+        else:
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.passphrase = passphrase
+
+        # Log the lengths of the credentials for debugging (do not log the actual values)
+        logging.info(f"Initializing TradeExecutor with API Key Length: {len(self.api_key)}, "
+                     f"API Secret Length: {len(self.api_secret)}, "
+                     f"Passphrase Length: {len(self.passphrase)}")
+
+        # Log whether testnet is being used
+        logging.debug(f"Using testnet: {testnet}")
 
         # Initialize Bitget exchange with CCXT
         self.exchange = ccxt.bitget({
-            "apiKey": api_key,
-            "secret": api_secret,
-            "password": passphrase,
+            "apiKey": self.api_key,
+            "secret": self.api_secret,
+            "password": self.passphrase,
             "enableRateLimit": True,
         })
 
         # Use testnet if specified
         if testnet:
             self.exchange.set_sandbox_mode(True)
+            logging.debug("Bitget exchange set to sandbox mode.")
 
         # State variables
         self.portfolio = {}          # { symbol: [ { "entry_price": float, "units": float }, ... ] }
         self.completed_trades = []   # Records of closed SELL trades with realized PnL
         self.processed_order_ids = set()
-
-        # Setup logging
-        self._setup_logging()
 
         # Load previously saved state from JSON files
         self._load_state()

@@ -78,6 +78,10 @@ class RiskManagementPanel:
         """
         self.current_symbol = symbol  
 
+        algorithm_state = self.get_algorithm_state()
+        self.algorithm_toggle.setChecked(algorithm_state)
+        self.handle_toggle_algorithm(algorithm_state)  
+
         params = self.db_manager.fetch_risk_params(symbol)
         if not params:
             self.status_label.setText(f"⚠️ No parameters found for {symbol}.")
