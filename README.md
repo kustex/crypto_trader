@@ -42,7 +42,7 @@ A fast, desktop‑first app for exploring trading ideas and executing them witho
 ## Screenshot — Main Dashboard
 
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="Main dashboard: price + Keltner + RVI + signals" loading="lazy">
+  <img src="docs/images/dashboard.PNG" alt="Main Dashboard" loading="lazy">
 </p>
 
 The dashboard shows your active symbol/timeframe, indicators, and final signals. Edit parameters on the left, place orders on the right, and watch portfolio tables update as fills arrive.
@@ -132,7 +132,7 @@ python main.py
 ### Backtesting
 
 <p align="center">
-  <img src="docs/images/backtester.png" alt="Backtester: parameters, run, results and plot" loading="lazy">
+  <img src="docs/images/backtester.PNG" alt="Backtester" loading="lazy">
 </p>
 
 1. Pick **symbol** and **date range** (and timeframe if applicable).
