@@ -18,7 +18,8 @@ class DatabaseManager:
         self.POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
         self.POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
         self.POSTGRES_DBNAME = os.getenv("POSTGRES_DB", "crypto_data")
-        self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "db")
+        # self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "db")
+        self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
         self.POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
         # Then your create_engine call can use these variables

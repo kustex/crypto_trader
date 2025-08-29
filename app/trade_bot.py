@@ -5,10 +5,9 @@ import logging
 import yfinance as yf
 from sqlalchemy import text
 import pandas as pd
-
 from app.database import DatabaseManager
 from app.executor import TradeExecutor
-from app.ui.api_credentials import load_api_credentials 
+
 
 # Configure logging for the trade bot.
 logging.basicConfig(
@@ -20,7 +19,6 @@ logging.basicConfig(
 logger = logging.getLogger("TradeBot")
 
 ALGORITHM_CONFIG_FILE = os.path.join("data", "algorithm_config.json")
-API_KEY, API_SECRET, API_PASSPHRASE = load_api_credentials()
 
 def load_algorithm_config():
     if os.path.exists(ALGORITHM_CONFIG_FILE):
@@ -46,22 +44,28 @@ class TradeBot:
 
     def __init__(self):
         self.db_manager = DatabaseManager()
-        self.trade_executor = TradeExecutor(API_KEY, API_SECRET, API_PASSPHRASE)
+        self.trade_executor = TradeExecutor()
 
         # For signal-based trading, track the timestamp of the last executed signal per symbol.
         self.last_executed_signal_timestamp = {}
         # The signal-based cycle is assumed to work on 15-minute signals.
         self.signal_cycle_interval = 60 * 60  # seconds
 
-    def get_total_capital(self):
+    def get_total_capital(self, cached_eur_usd_rate=None):
         """
         Return a tuple (total_capital, free_usdt) where:
           - total_capital is the sum (in USDT) of every asset's value.
           - free_usdt is the available USDT balance.
+          
+        Args:
+            cached_eur_usd_rate: Optional pre-fetched EUR/USD rate to avoid multiple API calls
         """
         balances = self.trade_executor.get_account_balance()
         total_capital = 0.0
         free_usdt = 0.0
+        
+        # Use provided EUR/USD rate or fetch it once if needed
+        eur_usd_rate = cached_eur_usd_rate
 
         for asset in balances:
             symbol = asset["symbol"].upper()
@@ -72,15 +76,21 @@ class TradeBot:
                 total_capital += balance
                 free_usdt = available
             elif symbol == "EUR":
-                try:
-                    ticker_yf = yf.Ticker("EURUSD=X")
-                    data = ticker_yf.history(period="1d", interval="1m")
-                    if data.empty:
-                        raise Exception("No data available for EUR/USD")
-                    eur_usd_rate = data['Close'].iloc[-1]
+                # Only fetch the EUR/USD rate once if we have EUR balance and it's not provided
+                if eur_usd_rate is None and balance > 0:
+                    try:
+                        ticker_yf = yf.Ticker("EURUSD=X")
+                        data = ticker_yf.history(period="1d", interval="1m")
+                        if data.empty:
+                            raise Exception("No data available for EUR/USD")
+                        eur_usd_rate = data['Close'].iloc[-1]
+                        logger.debug(f"Fetched EUR/USD rate: {eur_usd_rate}")
+                    except Exception as e:
+                        logger.error(f"Error fetching EUR/USD rate: {e}")
+                        eur_usd_rate = 1.09  # Default fallback value if fetch fails
+                
+                if eur_usd_rate is not None:
                     total_capital += balance * eur_usd_rate
-                except Exception as e:
-                    logger.error(f"Error fetching EUR/USD rate: {e}")
             else:
                 pair = f"{symbol}/USDT"
                 try:
@@ -201,11 +211,15 @@ class TradeBot:
                 )
                 self.execute_sell_order(symbol, units_to_sell)
 
-    def execute_signal_based_trading_for_symbol(self, symbol):
+    def execute_signal_based_trading_for_symbol(self, symbol, cached_eur_usd_rate=None):
         """
         For the given symbol, check if a new 15m signal is available.
         If so, handle BUY or SELL based on final_signal.
         Only trade if the algorithm is enabled for this symbol in the config.
+        
+        Args:
+            symbol: The trading symbol (e.g., "BTC/USDT")
+            cached_eur_usd_rate: Optional pre-fetched EUR/USD rate to avoid multiple API calls
         """
         config = load_algorithm_config()
         if not config.get(symbol, False):
@@ -224,7 +238,7 @@ class TradeBot:
         final_signal = signal["final_signal"]
         logger.info(f"Signal-based trading for {symbol}: New signal received with final_signal = {final_signal}")
 
-        total_capital, free_usdt = self.get_total_capital()
+        total_capital, free_usdt = self.get_total_capital(cached_eur_usd_rate)
         if total_capital is None:
             logger.warning("Signal-based trading: Total capital not available.")
             return
