@@ -1,4 +1,4 @@
-# Crypto Trader (PyQt6) — Signals, Backtests & One‑Click Orders
+# Crypto Trader — Signals, Backtests & One‑Click Orders
 
 ## What
 A desktop app to **explore trading ideas** and **execute trades** from the same screen. Tune parameters, regenerate signals, run quick backtests, and submit orders through your exchange account.
@@ -161,4 +161,5 @@ docker run --rm \
 ---
 
 ## License
-Add your license file and mention it here (e.g., MIT, Apache‑2.0).
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
+
