@@ -37,7 +37,6 @@ A desktop app to **explore trading ideas** and **execute trades** from the same 
 - **Python 3.11+**, **PyQt6**, **Matplotlib**
 - **ccxt** (Bitget) for trading; **yfinance** for quick quotes
 - **PostgreSQL** via **SQLAlchemy**
-- Utility deps: `tenacity`, `schedule`, `python-dateutil`
 - Packaging / Deployment: **requirements.txt**, **Dockerfile**, **docker-compose.yml**, Windows helpers: **install.bat**, **start_gui.bat**, **uninstall.bat**
 
 ---
@@ -97,9 +96,7 @@ Create `~/.crypto_trading_api_credentials` with three lines:
 5) **Run the app**
 ```bash
 # Most setups
-python -m app.ui.main_window
-# Or, if you keep a top-level script
-python main.py
+python -m app.main
 ```
 
 ### Option C — Docker / Docker Compose
@@ -144,14 +141,6 @@ docker run --rm \
 
 > **API credentials in Docker:** either bake them as build args/secrets or mount a file into the container (e.g., `-v ~/.crypto_trading_api_credentials:/root/.crypto_trading_api_credentials:ro`).
 
----
-
-## Roadmap
-- Batch backtests & parameter sweeps  
-- Strategy plug‑ins (more indicators/filters)  
-- Risk overlays on chart (stops/targets)  
-- CSV/Parquet export  
-- ...
 ---
 
 ## License
