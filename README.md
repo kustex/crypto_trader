@@ -1,6 +1,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-# Crypto Trader — Signals, Backtests & One‑Click Orders
+# Crypto Trader — Signals, Backtests, Automated & One‑Click Orders
 
 ## What
 A desktop app to **explore trading ideas** and **execute trades** from the same screen. Tune parameters, regenerate signals, run quick backtests, and submit orders through your exchange account.
